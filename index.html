@@ -200,6 +200,23 @@ th.th-desc,td.td-desc{max-width:40ch;overflow-wrap:anywhere;word-break:break-wor
   td.td-desc,th.th-desc{max-width:26ch;}
 }
 .btn-del { line-height: 1; padding: .1rem .35rem; }
+.qty-cell { display:inline-flex; align-items:center; gap:.35rem; }
+.qty-val { min-width: 1.2rem; text-align:center; display:inline-block; }
+.btn-split { line-height: 1; padding: .15rem .4rem; font-size: .8rem; }
+.cat-split-list { display:inline-flex; flex-direction:column; align-items:flex-start; gap:.2rem; }
+.cat-split-item { display:flex; align-items:center; gap:.35rem; font-size:.85rem; white-space:nowrap; }
+.cat-pct { font-variant-numeric: tabular-nums; color:#64748b; }
+:root[data-bs-theme="dark"] .cat-pct { color:#94a3b8; }
+.split-list { display:flex; flex-direction:column; gap:.6rem; }
+.split-row { display:flex; align-items:center; justify-content:space-between; gap:.75rem; }
+.split-label { display:flex; align-items:center; gap:.5rem; min-width:0; }
+.split-label .name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:200px; }
+.split-input-group { width:110px; }
+.split-input { text-align:right; }
+@media (max-width:576px){
+  .split-input-group { width:90px; }
+  .split-label .name { max-width:140px; }
+}
 
 /* Nav inferior tipo glass */
 .glass-nav {
@@ -373,6 +390,20 @@ body { padding-top: 0; padding-bottom: calc(4.5rem + var(--safe-bottom)); }
 @media (max-width:576px){
   .table.table-sm td,
   .table.table-sm th { padding: .85rem .8rem; }
+  .table-wrap { overflow-x: hidden; }
+  #tbl { table-layout: fixed; width: 100%; }
+  #tbl thead th { white-space: normal; }
+  #tbl th:nth-child(1),
+  #tbl td:nth-child(1) { width: 70px !important; }
+  #tbl th:nth-child(3),
+  #tbl td:nth-child(3) { width: 110px !important; }
+  #tbl th:nth-child(4),
+  #tbl td:nth-child(4) { width: 90px !important; }
+  .cat-cell { white-space: normal; text-align: left; }
+  .qty-cell { flex-wrap: wrap; justify-content: center; }
+  .btn-split { padding: .1rem .3rem; font-size: .75rem; }
+  .btn-del { padding: .1rem .3rem; }
+  .cat-split-item { font-size: .8rem; }
 }
 /* Solo el texto de la descripción es clicable (evitar que toda la celda lance el enlace) */
 .td-desc .desc-link { display: inline; padding: 0; }
@@ -407,9 +438,9 @@ body { padding-top: 0; padding-bottom: calc(4.5rem + var(--safe-bottom)); }
     <table class="table table-sm align-middle mb-0" id="tbl">
       <thead>
         <tr>
-          <th style="width:90px;">Nº</th>
+          <th style="width:120px;">Nº</th>
           <th class="th-desc">
-            Descripción
+            Producto
             <button id="btnSort" type="button" class="btn btn-sm btn-outline-secondary ms-2 py-0" title="Cambiar orden">A→Z</button>
           </th>
           <th style="width:180px;"></th>
@@ -432,7 +463,7 @@ body { padding-top: 0; padding-bottom: calc(4.5rem + var(--safe-bottom)); }
       <div id="diffMsg" class="mb-2 small"></div>
       <form id="manualForm" class="row g-2 align-items-end">
         <div class="col-12 col-sm-6">
-          <label class="form-label small mb-1">Descripción</label>
+          <label class="form-label small mb-1">Producto</label>
           <input id="mfDesc" type="text" class="form-control" placeholder="Ej. línea faltante">
         </div>
         <div class="col-6 col-sm-3">
@@ -504,6 +535,33 @@ body { padding-top: 0; padding-bottom: calc(4.5rem + var(--safe-bottom)); }
     </div>
   </div>
 
+  <!-- Modal: Repartir porcentaje -->
+  <div class="modal fade" id="splitModal" tabindex="-1" aria-labelledby="splitLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title" id="splitLabel">Repartir por porcentaje</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+        </div>
+        <div class="modal-body">
+          <div id="splitItemMeta" class="small text-muted"></div>
+          <div id="splitList" class="split-list mt-2"></div>
+          <div class="d-flex align-items-center justify-content-between mt-2">
+            <div class="small">Total: <strong id="splitTotal">0%</strong></div>
+            <div class="small text-danger d-none" id="splitWarn">El total debe ser 100%.</div>
+          </div>
+        </div>
+        <div class="modal-footer justify-content-between">
+          <button type="button" id="splitClear" class="btn btn-outline-danger">Quitar asignación</button>
+          <div class="d-flex gap-2">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="button" id="splitSave" class="btn btn-primary">Guardar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
 <script>
 /* ------------ ELEMENTOS Y ESTADO ------------ */
 const $file = document.getElementById('file');
@@ -521,8 +579,8 @@ let lastExpected = NaN;
 let lastCalc = NaN;
 let lastFilename = '';
 
-/* Categorías por fila (key -> categoryId) */
-const categoryMap = new Map();
+/* Reparto por fila (key -> [{id,pct}]) */
+const allocationMap = new Map();
 let currentItems = [];
 let itemsByKey = new Map();
 function itemKey(it) {
@@ -544,6 +602,8 @@ let activeCategoryId = null;
 let catEditId = null;
 let catEditMode = 'edit';
 let catEditModal = null;
+let splitEditKey = null;
+let splitModal = null;
 
 function getCategoryById(id){ return categories.find(c => c.id === id); }
 function slugifyName(name){
@@ -587,6 +647,96 @@ function setActiveCategory(id){
   activeCategoryId = id || null;
   saveCategories();
   renderCatBar();
+}
+
+function allocationTotal(list){
+  return (list || []).reduce((acc, a) => acc + (Number(a.pct) || 0), 0);
+}
+function formatPercent(n){
+  const val = isFinite(n) ? n : 0;
+  const hasDecimals = Math.abs(val % 1) > 0.001;
+  return val.toLocaleString('es-ES', {
+    minimumFractionDigits: hasDecimals ? 1 : 0,
+    maximumFractionDigits: 2
+  });
+}
+function parsePercentInput(val){
+  if (typeof val !== 'string') val = String(val ?? '');
+  val = val.trim().replace('%','').replace(/\s+/g,'').replace(',', '.');
+  const n = Number(val);
+  if (!isFinite(n)) return 0;
+  if (n < 0) return 0;
+  if (n > 100) return 100;
+  return n;
+}
+function normalizeAllocations(list){
+  const byId = new Map();
+  for (const entry of (list || [])){
+    if (!entry) continue;
+    const id = String(entry.id || '').trim();
+    if (!id) continue;
+    if (!categories.some(c => c.id === id)) continue;
+    let pct = Number(entry.pct);
+    if (!isFinite(pct) || pct <= 0) continue;
+    if (pct > 100) pct = 100;
+    byId.set(id, (byId.get(id) || 0) + pct);
+  }
+  const out = [];
+  for (const c of categories){
+    const pct = byId.get(c.id);
+    if (pct && pct > 0.001) out.push({ id: c.id, pct: Number(pct.toFixed(2)) });
+  }
+  return out;
+}
+function setAllocations(key, list){
+  const clean = normalizeAllocations(list);
+  if (!clean.length) allocationMap.delete(key);
+  else allocationMap.set(key, clean);
+}
+function getAllocations(key){
+  return allocationMap.get(key) || [];
+}
+function isAllocationComplete(key){
+  const list = getAllocations(key);
+  if (!list.length) return false;
+  return Math.abs(allocationTotal(list) - 100) <= 0.2;
+}
+function getPrimaryAllocation(key){
+  const list = getAllocations(key);
+  if (!list.length) return null;
+  let best = list[0];
+  for (const a of list){
+    if ((a.pct || 0) > (best.pct || 0)) best = a;
+  }
+  return best;
+}
+function replaceCategoryId(oldId, newId){
+  if (!oldId || !newId) return;
+  for (const [key, list] of Array.from(allocationMap.entries())){
+    let changed = false;
+    const next = list.map(a => {
+      if (a.id === oldId){ changed = true; return { id: newId, pct: a.pct }; }
+      return a;
+    });
+    if (changed) setAllocations(key, next);
+  }
+}
+function removeCategoryId(id){
+  if (!id) return;
+  for (const [key, list] of Array.from(allocationMap.entries())){
+    const next = list.filter(a => a.id !== id);
+    if (!next.length){
+      allocationMap.delete(key);
+      continue;
+    }
+    const total = allocationTotal(next);
+    if (total > 0){
+      const scaled = next.map(a => ({ id: a.id, pct: (a.pct / total) * 100 }));
+      setAllocations(key, scaled);
+    } else {
+      allocationMap.delete(key);
+    }
+  }
 }
 
 /* ---------- Footer spacer dinámico ---------- */
@@ -715,9 +865,7 @@ function saveCategoryEditor(){
       while (categories.some(c => c.id === unique && c !== cat)) unique = proposed + '-' + (k++);
       if (unique !== oldId){
         cat.id = unique;
-        for (const [kkey, cid] of Array.from(categoryMap.entries())){
-          if (cid === oldId) categoryMap.set(kkey, unique);
-        }
+        replaceCategoryId(oldId, unique);
         if (activeCategoryId === oldId) activeCategoryId = unique;
       }
     }
@@ -747,16 +895,14 @@ function deleteCategoryEditor(){
     return;
   }
 
-  const used = Array.from(categoryMap.values()).some(v => v === cat.id);
+  const used = Array.from(allocationMap.values()).some(list => list.some(a => a.id === cat.id));
   const msg = used
     ? `La categoría "${cat.name}" está asignada a algunas filas.\nSe eliminarán esas asignaciones. ¿Seguro que quieres eliminarla?`
     : `¿Eliminar la categoría "${cat.name}"?`;
   if (!confirm(msg)) return;
 
   // Eliminar asignaciones a esta categoría
-  for (const [k, v] of Array.from(categoryMap.entries())){
-    if (v === cat.id) categoryMap.delete(k);
-  }
+  removeCategoryId(cat.id);
   // Quitar de la lista de categorías (incluye originales si toca)
   categories = categories.filter(c => c.id !== cat.id);
 
@@ -784,6 +930,13 @@ document.addEventListener('click', (ev)=>{
   if (saveBtn){ saveCategoryEditor(); return; }
   const delBtn = ev.target.closest('#catEditDelete');
   if (delBtn){ deleteCategoryEditor(); return; }
+});
+
+document.addEventListener('click', (ev)=>{
+  const saveBtn = ev.target.closest('#splitSave');
+  if (saveBtn){ saveSplitEditor(); return; }
+  const clearBtn = ev.target.closest('#splitClear');
+  if (clearBtn){ clearSplitEditor(); return; }
 });
 
 /* ------------ NUMÉRICO / FORMATO ------------ */
@@ -854,6 +1007,24 @@ function priceFlagForRole(role){
   }
 }
 
+function renderAllocationsCell(allocs){
+  if (!allocs || !allocs.length) return '—';
+  const byId = new Map(allocs.map(a => [a.id, a.pct]));
+  const parts = categories
+    .filter(c => byId.has(c.id))
+    .map(c => {
+      const pct = byId.get(c.id);
+      const showPct = allocs.length > 1 || Math.abs((pct || 0) - 100) > 0.2;
+      return `<div class="cat-split-item">
+        <span class="cat-dot" style="background:${c.color}"></span>
+        <span class="cat-name">${escapeHtml(c.name)}</span>
+        ${showPct ? `<span class="cat-pct">${escapeHtml(formatPercent(pct))}%</span>` : ''}
+      </div>`;
+    });
+  if (!parts.length) return '—';
+  return `<div class="cat-split-list">${parts.join('')}</div>`;
+}
+
 /* ------------ RENDER TABLA ------------ */
 function setTable(items){
   items = (items || []).slice();
@@ -866,7 +1037,7 @@ function setTable(items){
     $catsum.textContent = '';
     currentItems = [];
     itemsByKey = new Map();
-    categoryMap.clear();
+    allocationMap.clear();
     updateExportButtonState();
     return 0;
   }
@@ -926,26 +1097,30 @@ function setTable(items){
     itemsByKey.set(key, r);
     total += r.amount;
 
-    const catId = categoryMap.get(key) || '';
-    const catObj = categories.find(c => c.id === catId);
+    const allocs = getAllocations(key);
+    const primaryAlloc = getPrimaryAllocation(key);
+    const catObj = primaryAlloc ? getCategoryById(primaryAlloc.id) : null;
     const color = catObj ? catObj.color : '';
-    const name  = catObj ? catObj.name  : '';
     const bg = color ? hexToRGBA(color, 0.22) : '';
     const style = color ? `style="--cat-color:${color}; --cat-bg:${bg}"` : '';
-    const rowClass = catId ? 'row-assigned' : '';
+    const rowClass = allocs.length ? `row-assigned${allocs.length > 1 ? ' row-split' : ''}` : '';
     const role = (roleByKey.get(key) || '');
     const flag = priceFlagForRole(role);
 
     html += `<tr data-key="${escapeHtml(key)}"
                  data-manual-id="${r.manualId ? escapeHtml(String(r.manualId)) : ''}"
-                 data-cat-id="${catId}"
+                 data-cat-id="${primaryAlloc ? escapeHtml(primaryAlloc.id) : ''}"
                  class="${rowClass}"
                  ${style}>
       <td class="mono">
-        ${r.manualId
-          ? `<button type="button" class="btn btn-sm btn-outline-danger btn-del" title="Eliminar línea manual">✖</button>`
-          : `${escapeHtml(String(r.quantity))}`
-        }
+        <div class="qty-cell">
+          <button type="button" class="btn btn-sm btn-outline-secondary btn-split" title="Repartir por porcentajes">%</button>
+          <span class="qty-val">${escapeHtml(String(r.quantity))}</span>
+          ${r.manualId
+            ? `<button type="button" class="btn btn-sm btn-outline-danger btn-del" title="Eliminar línea manual">✖</button>`
+            : ''
+          }
+        </div>
       </td>
       <td class="td-desc">
         <a class="desc-link" href="${buildSearchURL(r.description)}" target="_blank" rel="noopener">
@@ -953,10 +1128,7 @@ function setTable(items){
         </a>
       </td>
       <td class="cat-cell">
-        ${catId
-          ? `<span class="cat-dot" style="background:${color}" title="${escapeHtml(name)}"></span>`
-          : `—`
-        }
+        ${renderAllocationsCell(allocs)}
       </td>
       <td class="text-end mono">${toEUR(r.amount)}</td>
     </tr>`;
@@ -978,11 +1150,15 @@ function setTable(items){
 function updateCategorySummary() {
   const sums = {};
   for (const c of categories) sums[c.id] = { n:0, total:0, color:c.color, name:c.name };
-  for (const [key, catId] of categoryMap.entries()) {
+  for (const [key, allocs] of allocationMap.entries()) {
     const it = itemsByKey.get(key);
-    if (!it || !(catId in sums)) continue;
-    sums[catId].n += 1;
-    sums[catId].total += Number(it.amount) || 0;
+    if (!it) continue;
+    const amount = Number(it.amount) || 0;
+    for (const a of allocs){
+      if (!(a.id in sums)) continue;
+      sums[a.id].n += 1;
+      sums[a.id].total += amount * (Number(a.pct) || 0) / 100;
+    }
   }
   const parts = categories.map(c=>{
     const s = sums[c.id];
@@ -1019,18 +1195,23 @@ function buildExportCard(catObj, items) {
       <thead>
         <tr>
           <th style="width:100px;">Nº</th>
-          <th>Descripción</th>
+          <th>Producto</th>
           <th class="right" style="width:150px;">Importe (€)</th>
         </tr>
       </thead>
       <tbody>
-        ${items.map(it => `
+        ${items.map(it => {
+          const pctLabel = (isFinite(it.pct) && Math.abs(it.pct - 100) > 0.2)
+            ? ` (${formatPercent(it.pct)}%)`
+            : '';
+          return `
           <tr>
             <td class="mono">${escapeHtml(String(it.quantity))}</td>
-            <td>${escapeHtml(String(it.description))}</td>
+            <td>${escapeHtml(String(it.description))}${pctLabel}</td>
             <td class="right mono">${toEUR(Number(it.amount))}</td>
           </tr>
-        `).join('')}
+          `;
+        }).join('')}
         <tr>
           <td></td>
           <td class="total">TOTAL</td>
@@ -1049,12 +1230,16 @@ async function exportCategoryImages() {
   }
   const byCat = {};
   for (const c of categories) byCat[c.id] = [];
-  for (const tr of document.querySelectorAll('#tbl tbody tr[data-key]')) {
-    const key = tr.getAttribute('data-key');
-    if (!key) continue;
-    const catId = categoryMap.get(key);
+  for (const [key, allocs] of allocationMap.entries()) {
     const it = itemsByKey.get(key);
-    if (catId && it && byCat[catId]) byCat[catId].push(it);
+    if (!it) continue;
+    const amount = Number(it.amount) || 0;
+    for (const alloc of allocs){
+      if (!byCat[alloc.id]) continue;
+      const partAmt = amount * (Number(alloc.pct) || 0) / 100;
+      if (!isFinite(partAmt) || partAmt <= 0) continue;
+      byCat[alloc.id].push({ ...it, amount: partAmt, pct: alloc.pct });
+    }
   }
   const wrapper = document.createElement('div');
   wrapper.style.width = '980px';
@@ -1113,18 +1298,17 @@ async function exportCategoryImages() {
 
 /* ------------ ESTADO EXPORT & ENLACE DESC ------------ */
 function updateExportButtonState() {
-  const rows = Array.from(document.querySelectorAll('#tbl tbody tr[data-key]'));
-  if (rows.length === 0) {
+  if (!currentItems.length) {
     $btnExport.disabled = true;
     $btnExport.title = 'No hay productos para exportar';
     return;
   }
   let assigned = 0;
-  for (const tr of rows) {
-    const key = tr.getAttribute('data-key');
-    if (key && categoryMap.has(key)) assigned++;
+  for (const it of currentItems) {
+    const key = itemKey(it);
+    if (key && isAllocationComplete(key)) assigned++;
   }
-  const allAssigned = assigned === rows.length;
+  const allAssigned = assigned === currentItems.length;
   $btnExport.disabled = !allAssigned;
   $btnExport.title = allAssigned
     ? 'Exportar una única imagen con todas las categorías'
@@ -1140,21 +1324,37 @@ document.getElementById('tbl').addEventListener('click', (ev) => {
   }
 }, true);
 
+// Abrir editor de porcentajes
+document.getElementById('tbl').addEventListener('click', (ev) => {
+  const btn = ev.target.closest('.btn-split');
+  if (!btn) return;
+  ev.stopPropagation();
+  const tr = btn.closest('tr[data-key]');
+  if (!tr) return;
+  const key = tr.getAttribute('data-key');
+  if (!key) return;
+  openSplitEditor(key);
+});
+
 /* ------------ CLIC EN FILA (asignación) ------------ */
 document.getElementById('tbl').addEventListener('click', (ev) => {
   const tr = ev.target.closest('tr[data-key]');
   if (!tr) return;
   if (ev.target.closest('.btn-del')) return;
+  if (ev.target.closest('.btn-split')) return;
   if (ev.target.closest('a.desc-link')) return;
   const key = tr.getAttribute('data-key');
   if (!key) return;
 
   if (!activeCategoryId) {
-    if (categoryMap.has(key)) categoryMap.delete(key);
+    if (allocationMap.has(key)) allocationMap.delete(key);
   } else {
-    const prev = categoryMap.get(key);
-    if (prev === activeCategoryId) categoryMap.delete(key);
-    else categoryMap.set(key, activeCategoryId);
+    const prev = getAllocations(key);
+    const isSingleActive = prev.length === 1
+      && prev[0].id === activeCategoryId
+      && Math.abs((prev[0].pct || 0) - 100) <= 0.2;
+    if (isSingleActive) allocationMap.delete(key);
+    else setAllocations(key, [{ id: activeCategoryId, pct: 100 }]);
   }
   const total = setTable(baseItems);
   lastCalc = total;
@@ -1163,9 +1363,12 @@ document.getElementById('tbl').addEventListener('click', (ev) => {
 document.getElementById('tbl').addEventListener('dblclick', (ev) => {
   const tr = ev.target.closest('tr[data-key]');
   if (!tr) return;
+  if (ev.target.closest('.btn-del')) return;
+  if (ev.target.closest('.btn-split')) return;
+  if (ev.target.closest('a.desc-link')) return;
   const key = tr.getAttribute('data-key');
   if (!key) return;
-  if (categoryMap.has(key)) categoryMap.delete(key);
+  if (allocationMap.has(key)) allocationMap.delete(key);
   const total = setTable(baseItems);
   lastCalc = total;
   setCheck(lastFilename || '', total);
@@ -1184,7 +1387,7 @@ document.getElementById('tbl').addEventListener('click', (ev) => {
   if (idx === -1) return;
   const it = manualItems[idx];
   const k = itemKey(it);
-  if (categoryMap.has(k)) categoryMap.delete(k);
+  if (allocationMap.has(k)) allocationMap.delete(k);
   manualItems.splice(idx, 1);
   const total = setTable(baseItems);
   lastCalc = total;
@@ -1421,7 +1624,7 @@ async function processSelectedFile(){
     extractMeta(lines);
     const section = filterProductsSection(lines);
     const items = parseProducts(section);
-    categoryMap.clear();
+    allocationMap.clear();
     manualItems = [];
     baseItems = items.slice();
     baseItems.forEach((it, idx) => { it.origIndex = idx; });
@@ -1519,6 +1722,113 @@ function renderManualCatDropdown(){
   });
 }
 
+/* ------------ Reparto porcentual ------------ */
+function initSplitModal(){
+  if (splitModal) return;
+  const $modal = document.getElementById('splitModal');
+  if (!$modal) return;
+  splitModal = new bootstrap.Modal($modal, { backdrop: true, focus: true, keyboard: true });
+  $modal.addEventListener('hidden.bs.modal', () => { splitEditKey = null; });
+}
+function updateSplitTotal(){
+  const inputs = Array.from(document.querySelectorAll('#splitList .split-input'));
+  let total = 0;
+  for (const input of inputs){
+    total += parsePercentInput(input.value);
+  }
+  const totalEl = document.getElementById('splitTotal');
+  if (totalEl) totalEl.textContent = `${formatPercent(total)}%`;
+  const warn = document.getElementById('splitWarn');
+  const ok = Math.abs(total - 100) <= 0.2;
+  if (warn) warn.classList.toggle('d-none', ok || total === 0);
+  if (totalEl){
+    totalEl.classList.toggle('text-success', ok);
+    totalEl.classList.toggle('text-danger', !ok && total > 0);
+  }
+}
+function readSplitAllocations(){
+  const inputs = Array.from(document.querySelectorAll('#splitList .split-input'));
+  const list = [];
+  for (const input of inputs){
+    const id = input.getAttribute('data-cat-id');
+    const pct = parsePercentInput(input.value);
+    if (pct > 0) list.push({ id, pct });
+  }
+  return list;
+}
+function openSplitEditor(key){
+  const it = itemsByKey.get(key);
+  if (!it) return;
+  splitEditKey = key;
+  initSplitModal();
+  if (!splitModal) return;
+
+  const meta = document.getElementById('splitItemMeta');
+  if (meta) {
+    meta.innerHTML = `<div class="fw-semibold">${escapeHtml(it.description)}</div>
+      <div class="small text-muted">Importe: ${toEUR(it.amount)}</div>`;
+  }
+
+  const list = document.getElementById('splitList');
+  const allocs = getAllocations(key);
+  const byId = new Map(allocs.map(a => [a.id, a.pct]));
+  if (list){
+    list.innerHTML = categories.map(c => {
+      const pct = byId.get(c.id) || 0;
+      const value = pct > 0 ? formatPercent(pct) : '';
+      return `<div class="split-row">
+        <div class="split-label">
+          <span class="cat-dot" style="background:${c.color}"></span>
+          <span class="name">${escapeHtml(c.name)}</span>
+        </div>
+        <div class="input-group input-group-sm split-input-group">
+          <input type="text" class="form-control split-input" data-cat-id="${c.id}" inputmode="decimal" value="${value}" placeholder="0">
+          <span class="input-group-text">%</span>
+        </div>
+      </div>`;
+    }).join('');
+    list.querySelectorAll('.split-input').forEach((input) => {
+      input.addEventListener('input', updateSplitTotal);
+      input.addEventListener('blur', () => {
+        const n = parsePercentInput(input.value);
+        input.value = n > 0 ? formatPercent(n) : '';
+        updateSplitTotal();
+      });
+    });
+  }
+
+  const clearBtn = document.getElementById('splitClear');
+  if (clearBtn) clearBtn.disabled = allocs.length === 0;
+  updateSplitTotal();
+  splitModal.show();
+}
+function saveSplitEditor(){
+  if (!splitEditKey) return;
+  const list = readSplitAllocations();
+  const total = allocationTotal(list);
+  if (total <= 0.2){
+    allocationMap.delete(splitEditKey);
+  } else if (Math.abs(total - 100) > 0.2){
+    const warn = document.getElementById('splitWarn');
+    if (warn) warn.classList.remove('d-none');
+    return;
+  } else {
+    setAllocations(splitEditKey, list);
+  }
+  const totalCalc = setTable(baseItems);
+  lastCalc = totalCalc;
+  setCheck(lastFilename || '', totalCalc);
+  if (splitModal) splitModal.hide();
+}
+function clearSplitEditor(){
+  if (!splitEditKey) return;
+  allocationMap.delete(splitEditKey);
+  const total = setTable(baseItems);
+  lastCalc = total;
+  setCheck(lastFilename || '', total);
+  if (splitModal) splitModal.hide();
+}
+
 /* ------------ EVENTOS ------------ */
 $file.addEventListener('change', processSelectedFile);
 
@@ -1563,7 +1873,7 @@ document.getElementById('manualForm').addEventListener('submit', (ev) => {
   manualItems.push(it);
 
   const key = itemKey(it);
-  if (cat) categoryMap.set(key, cat);
+  if (cat) setAllocations(key, [{ id: cat, pct: 100 }]);
 
   const total = setTable(baseItems);
   lastCalc = total;
