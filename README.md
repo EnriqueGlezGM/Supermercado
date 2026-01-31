@@ -2,7 +2,7 @@
 
 Una herramienta 100% en el navegador para **leer tickets de Mercadona y Lidl (PDF o imagen)**, extraer los productos, **repartirlos por categorías**, **validar el total** frente al que aparece en el nombre del archivo y **exportar un resumen como imagen**.
 
-👉 **Demo**: [Lector](https://enriqueglezgm.github.io/mercadona/)
+👉 **Demo**: [Lector](https://enriqueglezgm.github.io/Supermercado/)
 
 ---
 
