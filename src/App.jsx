@@ -71,6 +71,12 @@ export default function App() {
 
         <div id="catsum" className="mt-2"></div>
 
+        <div className="d-flex justify-content-between align-items-center mt-2">
+          <button id="btnToggleHidden" className="btn btn-sm btn-outline-secondary d-none" type="button" disabled>
+            Mostrar ocultos
+          </button>
+        </div>
+
         <div className="d-grid mt-2">
           <button id="btnExport" className="btn btn-outline-secondary" disabled>
             Exportar resumen
@@ -158,6 +164,22 @@ export default function App() {
                     title="Elige color"
                   />
                 </div>
+                <div className="col-12">
+                  <div className="form-check">
+                    <input className="form-check-input" type="checkbox" id="catEditNoSplit" />
+                    <label className="form-check-label" htmlFor="catEditNoSplit">
+                      Excluir de reparto %
+                    </label>
+                  </div>
+                </div>
+                <div className="col-12">
+                  <div className="form-check">
+                    <input className="form-check-input" type="checkbox" id="catEditMask" />
+                    <label className="form-check-label" htmlFor="catEditMask">
+                      Enmascarar productos en el resumen
+                    </label>
+                  </div>
+                </div>
               </form>
               <div id="catEditHint" className="form-text">Pulsa “Guardar” para aplicar los cambios.</div>
             </div>
@@ -192,6 +214,51 @@ export default function App() {
               <div className="d-flex gap-2">
                 <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
                 <button type="button" id="splitSave" className="btn btn-primary">Guardar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="modal fade" id="rowEditModal" tabIndex={-1} aria-labelledby="rowEditLabel" aria-hidden="true">
+        <div className="modal-dialog">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h5 className="modal-title" id="rowEditLabel">Editar producto</h5>
+              <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+            </div>
+            <div className="modal-body">
+              <form id="rowEditForm" className="row g-3">
+                <div className="col-12">
+                  <label htmlFor="rowEditName" className="form-label small mb-1">Nombre</label>
+                  <input type="text" id="rowEditName" className="form-control" maxLength={80} required />
+                </div>
+                <div className="col-6">
+                  <label htmlFor="rowEditAmount" className="form-label small mb-1">Importe</label>
+                  <div className="input-group">
+                    <span className="input-group-text">€</span>
+                    <input
+                      type="text"
+                      id="rowEditAmount"
+                      className="form-control mono"
+                      inputMode="decimal"
+                      autoComplete="off"
+                    />
+                  </div>
+                </div>
+                <div className="col-6 d-flex align-items-end">
+                  <button type="button" id="rowEditSplit" className="btn btn-outline-secondary w-100">
+                    Repartir %
+                  </button>
+                </div>
+              </form>
+              <div className="form-text mt-2">Puedes cambiar el nombre, el importe u ocultar la línea.</div>
+            </div>
+            <div className="modal-footer justify-content-between">
+              <button type="button" id="rowEditDelete" className="btn btn-outline-danger">Ocultar</button>
+              <div className="d-flex gap-2">
+                <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="button" id="rowEditSave" className="btn btn-primary">Guardar</button>
               </div>
             </div>
           </div>

@@ -31,6 +31,7 @@ export function initTicketApp() {
   const $btnExport = document.getElementById('btnExport');
   const $exportRoot = document.getElementById('export-root');
   const $catAddBtn = document.getElementById('catAddBtn');
+  const $btnToggleHidden = document.getElementById('btnToggleHidden');
 
   if (!$file || !$tblEl || !$progress || !$meta || !$check || !$catsum || !$btnExport || !$exportRoot) {
     return;
@@ -39,6 +40,9 @@ export function initTicketApp() {
 
   let lastCheckOk = null;
   let lastExpected = NaN;
+  let lastExpectedRaw = NaN;
+  let lastHiddenTotal = 0;
+  let showHidden = false;
   let lastCalc = NaN;
   let lastFilename = '';
   let lastStore = '';
@@ -68,6 +72,8 @@ export function initTicketApp() {
   let catEditModal = null;
   let splitEditKey = null;
   let splitModal = null;
+  let rowEditKey = null;
+  let rowEditModal = null;
 
   function getCategoryById(id){ return categories.find(c => c.id === id); }
   function slugifyName(name){
@@ -87,9 +93,9 @@ export function initTicketApp() {
   }
   function defaultCategories(){
     return [
-      {id:'alberto', name:'Alberto', color:'#dc3545', locked:true},
-      {id:'kike',    name:'Kike',    color:'#0d6efd', locked:true},
-      {id:'comun',   name:'Común',   color:'#ffc107', locked:true}
+    {id:'alberto', name:'Alberto', color:'#dc3545', locked:true},
+    {id:'kike',    name:'Kike',    color:'#0d6efd', locked:true},
+    {id:'comun',   name:'Común',   color:'#ffc107', locked:true, noSplit:true}
     ];
   }
   function loadCategories(){
@@ -257,6 +263,8 @@ export function initTicketApp() {
 
     const $name = document.getElementById('catEditName');
     const $color = document.getElementById('catEditColor');
+    const $noSplit = document.getElementById('catEditNoSplit');
+    const $mask = document.getElementById('catEditMask');
     const $title = document.getElementById('catEditLabel');
     const $hint = document.getElementById('catEditHint');
     const $save = document.getElementById('catEditSave');
@@ -265,6 +273,8 @@ export function initTicketApp() {
     if ($color) $color.value = isCreate
       ? '#22c55e'
       : (/^#[0-9a-f]{6}$/i.test(cat?.color || '') ? cat.color : '#22c55e');
+    if ($noSplit) $noSplit.checked = isCreate ? false : !!cat.noSplit;
+    if ($mask) $mask.checked = isCreate ? false : !!cat.masked;
 
     if ($title) $title.textContent = isCreate ? 'Nueva categoría' : 'Editar categoría';
     if ($hint) $hint.textContent = isCreate
@@ -298,6 +308,8 @@ export function initTicketApp() {
   function saveCategoryEditor(){
     const $name = document.getElementById('catEditName');
     const $color = document.getElementById('catEditColor');
+    const $noSplit = document.getElementById('catEditNoSplit');
+    const $mask = document.getElementById('catEditMask');
     if (!$name || !$color) return;
 
     const newName = String($name.value || '').trim();
@@ -310,7 +322,14 @@ export function initTicketApp() {
       const baseId = slugifyName(newName) || ('cat-' + Date.now().toString(36));
       let unique = baseId, k = 2;
       while (categories.some(c => c.id === unique)) unique = `${baseId}-${k++}`;
-      const newCat = { id: unique, name: newName, color: newColor, locked: false };
+      const newCat = {
+        id: unique,
+        name: newName,
+        color: newColor,
+        locked: false,
+        noSplit: !!$noSplit?.checked,
+        masked: !!$mask?.checked
+      };
       categories.push(newCat);
       activeCategoryId = newCat.id;
     } else {
@@ -321,6 +340,8 @@ export function initTicketApp() {
       const oldId = cat.id;
       cat.name = newName;
       cat.color = newColor;
+      cat.noSplit = !!$noSplit?.checked;
+      cat.masked = !!$mask?.checked;
 
       // Permitimos renombrar incluso si era "locked"
       const proposed = slugifyName(newName) || oldId;
@@ -402,6 +423,20 @@ export function initTicketApp() {
     const clearBtn = ev.target.closest('#splitClear');
     if (clearBtn){ clearSplitEditor(); return; }
   });
+  document.addEventListener('click', (ev)=>{
+    const saveBtn = ev.target.closest('#rowEditSave');
+    if (saveBtn){ saveRowEditor(); return; }
+    const delBtn = ev.target.closest('#rowEditDelete');
+    if (delBtn){ deleteRowEditor(); return; }
+    const splitBtn = ev.target.closest('#rowEditSplit');
+    if (splitBtn){
+      if (rowEditKey) {
+        if (rowEditModal) rowEditModal.hide();
+        openSplitEditor(rowEditKey);
+      }
+      return;
+    }
+  });
 
   /* ------------ NUMÉRICO / FORMATO ------------ */
   const toNumberEUR = (s) => {
@@ -430,20 +465,24 @@ export function initTicketApp() {
   function setCheckNone(){ $check.innerHTML = '<span class="text-muted">— Validación pendiente —</span>'; }
   function setCheck(filename, totalCalc){
     const expected = parseFilenameTotal(filename);
+    const hiddenTotal = getHiddenTotal(baseItems.concat(manualItems));
+    lastHiddenTotal = hiddenTotal;
+    lastExpectedRaw = expected;
+    const adjustedExpected = isFinite(expected) ? Number((expected - hiddenTotal).toFixed(2)) : NaN;
     let html = '';
     if (!isFinite(expected)) {
       html = '<div class="alert alert-secondary py-2 my-2" role="alert">No se encontró importe en el nombre del archivo.</div>';
       lastCheckOk = null; lastExpected = NaN; lastCalc = Number(totalCalc)||NaN; lastFilename = filename || '';
-    } else if (nearlyEqual(expected, totalCalc)) {
+    } else if (nearlyEqual(adjustedExpected, totalCalc)) {
       html = `<div class="alert alert-success fw-bold my-2" role="alert" style="font-size:1.05rem">
-        ✅ Coincide — <span class="fw-normal">archivo: ${toEUR(expected)} • calculado: ${toEUR(totalCalc)}</span>
+        ✅ Coincide — <span class="fw-normal">archivo: ${toEUR(expected)}${hiddenTotal ? ` • ocultos: ${toEUR(hiddenTotal)}` : ''} • esperado: ${toEUR(adjustedExpected)} • calculado: ${toEUR(totalCalc)}</span>
       </div>`;
-      lastCheckOk = true; lastExpected = Number(expected); lastCalc = Number(totalCalc); lastFilename = filename || '';
+      lastCheckOk = true; lastExpected = Number(adjustedExpected); lastCalc = Number(totalCalc); lastFilename = filename || '';
     } else {
       html = `<div class="alert alert-danger fw-bold my-2" role="alert" style="font-size:1.05rem">
-        ❌ No coincide — <span class="fw-normal">archivo: ${toEUR(expected)} • calculado: ${toEUR(totalCalc)}</span>
+        ❌ No coincide — <span class="fw-normal">archivo: ${toEUR(expected)}${hiddenTotal ? ` • ocultos: ${toEUR(hiddenTotal)}` : ''} • esperado: ${toEUR(adjustedExpected)} • calculado: ${toEUR(totalCalc)}</span>
       </div>`;
-      lastCheckOk = false; lastExpected = Number(expected); lastCalc = Number(totalCalc); lastFilename = filename || '';
+      lastCheckOk = false; lastExpected = Number(adjustedExpected); lastCalc = Number(totalCalc); lastFilename = filename || '';
     }
     $check.innerHTML = html;
     updateManualFixUI();
@@ -493,23 +532,52 @@ export function initTicketApp() {
   }
 
   /* ------------ RENDER TABLA ------------ */
+  function getHiddenTotal(items){
+    return (items || []).reduce((acc, it) => {
+      if (!it || !it.hidden) return acc;
+      return acc + (Number(it.amount) || 0);
+    }, 0);
+  }
+  function isHidden(it){ return !!(it && it.hidden); }
+  function updateHiddenToggle(count){
+    if (!$btnToggleHidden) return;
+    if (!count){
+      $btnToggleHidden.disabled = true;
+      $btnToggleHidden.classList.add('d-none');
+      $btnToggleHidden.textContent = 'Mostrar ocultos';
+      return;
+    }
+    $btnToggleHidden.classList.remove('d-none');
+    $btnToggleHidden.disabled = false;
+    $btnToggleHidden.innerHTML = showHidden
+      ? `👁️‍🗨️✖ Ocultar (${count})`
+      : `👁️ Mostrar (${count})`;
+  }
   function setTable(items){
     items = (items || []).slice();
     if (Array.isArray(manualItems) && manualItems.length){
       items = items.concat(manualItems);
     }
-    if(!items || items.length===0){
-      $tbl.innerHTML = `<tr><td colspan="4" class="text-muted">No se detectaron líneas de producto.</td></tr>`;
+    const hiddenCount = items.filter(it => isHidden(it)).length;
+    const hiddenTotal = getHiddenTotal(items);
+    const visibleItems = items.filter(it => !isHidden(it));
+    const renderItems = showHidden ? items : visibleItems;
+    if(!renderItems || renderItems.length===0){
+      const msg = hiddenCount
+        ? `Todas las líneas están ocultas (${hiddenCount}).`
+        : 'No se detectaron líneas de producto.';
+      $tbl.innerHTML = `<tr><td colspan="4" class="text-muted">${msg}</td></tr>`;
       setCheckNone();
       $catsum.textContent = '';
       currentItems = [];
       itemsByKey = new Map();
       allocationMap.clear();
       updateExportButtonState();
+      updateHiddenToggle(hiddenCount);
       return 0;
     }
 
-    currentItems = items.slice();
+    currentItems = visibleItems.slice();
 
     // Agrupar por descripción y asignar roles de precio
     const groups = new Map(); // descKey -> [{ key, amount }]
@@ -538,7 +606,7 @@ export function initTicketApp() {
     // Orden
     let sorted;
     if (sortMode === 'ticket') {
-      sorted = currentItems.slice().sort((a,b) => {
+      sorted = renderItems.slice().sort((a,b) => {
         const oa = isFinite(a.origIndex) ? a.origIndex : Number.POSITIVE_INFINITY;
         const ob = isFinite(b.origIndex) ? b.origIndex : Number.POSITIVE_INFINITY;
         if (oa !== ob) return oa - ob;
@@ -547,7 +615,7 @@ export function initTicketApp() {
         return da.localeCompare(db, 'es', { sensitivity:'base' });
       });
     } else {
-      sorted = currentItems.slice().sort((a,b) => {
+      sorted = renderItems.slice().sort((a,b) => {
         const da = normalizeDescKey(a.description);
         const db = normalizeDescKey(b.description);
         const cmp = da.localeCompare(db, 'es', { sensitivity:'base' });
@@ -559,29 +627,32 @@ export function initTicketApp() {
     itemsByKey = new Map();
     let html = "";
     let total = 0;
+    for (const r of currentItems){ total += Number(r.amount) || 0; }
     for(const r of sorted){
       const key = itemKey(r);
       itemsByKey.set(key, r);
-      total += r.amount;
-
-      const allocs = getAllocations(key);
+      const hidden = isHidden(r);
+      const allocs = hidden ? [] : getAllocations(key);
       const primaryAlloc = getPrimaryAllocation(key);
       const catObj = primaryAlloc ? getCategoryById(primaryAlloc.id) : null;
       const color = catObj ? catObj.color : '';
       const bg = color ? hexToRGBA(color, 0.22) : '';
       const style = color ? `style="--cat-color:${color}; --cat-bg:${bg}"` : '';
-      const rowClass = allocs.length ? `row-assigned${allocs.length > 1 ? ' row-split' : ''}` : '';
+      const rowClassBase = allocs.length ? `row-assigned${allocs.length > 1 ? ' row-split' : ''}` : '';
+      const rowClass = hidden ? `row-hidden${rowClassBase ? ' ' + rowClassBase : ''}` : rowClassBase;
       const role = (roleByKey.get(key) || '');
       const flag = priceFlagForRole(role);
+      const catCell = hidden ? '<span class="text-muted">Oculto</span>' : renderAllocationsCell(allocs);
 
       html += `<tr data-key="${escapeHtml(key)}"
-                   data-manual-id="${r.manualId ? escapeHtml(String(r.manualId)) : ''}"
-                   data-cat-id="${primaryAlloc ? escapeHtml(primaryAlloc.id) : ''}"
-                   class="${rowClass}"
-                   ${style}>
+                 data-manual-id="${r.manualId ? escapeHtml(String(r.manualId)) : ''}"
+                 data-cat-id="${primaryAlloc ? escapeHtml(primaryAlloc.id) : ''}"
+                 data-hidden="${hidden ? '1' : '0'}"
+                 class="${rowClass}"
+                 ${style}>
         <td class="mono">
           <div class="qty-cell">
-            <button type="button" class="btn btn-sm btn-outline-secondary btn-split" title="Repartir por porcentajes">%</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary btn-split" title="Editar producto" aria-label="Editar producto">✏️</button>
             <span class="qty-val">${escapeHtml(String(r.quantity))}</span>
             ${r.manualId
               ? `<button type="button" class="btn btn-sm btn-outline-danger btn-del" title="Eliminar línea manual">✖</button>`
@@ -594,24 +665,33 @@ export function initTicketApp() {
             ${flag}<span class="desc-text">${escapeHtml(r.description)}</span>
           </a>
         </td>
-        <td class="cat-cell">
-          ${renderAllocationsCell(allocs)}
-        </td>
-        <td class="text-end mono">${toEUR(r.amount)}</td>
-      </tr>`;
+      <td class="cat-cell">
+        ${catCell}
+      </td>
+      <td class="text-end mono">${toEUR(r.amount)}</td>
+    </tr>`;
     }
+  html += `<tr class="table-light">
+    <td></td>
+    <td class="fw-bold">TOTAL</td>
+    <td></td>
+    <td class="text-end mono fw-bold">${toEUR(total)}</td>
+  </tr>`;
+  if (hiddenTotal){
     html += `<tr class="table-light">
       <td></td>
-      <td class="fw-bold">TOTAL</td>
+      <td class="fw-bold">Ocultos</td>
       <td></td>
-      <td class="text-end mono fw-bold">${toEUR(total)}</td>
+      <td class="text-end mono fw-bold">${toEUR(hiddenTotal)}</td>
     </tr>`;
-    $tbl.innerHTML = html;
-
-    updateCategorySummary();
-    updateExportButtonState();
-    return total;
   }
+  $tbl.innerHTML = html;
+
+  updateCategorySummary();
+  updateExportButtonState();
+  updateHiddenToggle(hiddenCount);
+  return total;
+}
 
   /* ------------ RESUMEN Y COPIAR TOTALES ------------ */
   function updateCategorySummary() {
@@ -656,7 +736,21 @@ export function initTicketApp() {
     const wrap = document.createElement('div');
     wrap.className = 'export-card';
     const total = items.reduce((a,b)=> a + (Number(b.amount)||0), 0);
-    wrap.innerHTML = `
+    if (catObj.masked) {
+      wrap.innerHTML = `
+      <h2 style="color:${catObj.color}">Lista ${escapeHtml(catObj.name)}</h2>
+      <div class="meta">Productos: ${items.length}</div>
+      <table>
+        <tbody>
+          <tr>
+            <td class="total">TOTAL</td>
+            <td class="right mono total">${toEUR(total)}</td>
+          </tr>
+        </tbody>
+      </table>
+    `;
+    } else {
+      wrap.innerHTML = `
       <h2 style="color:${catObj.color}">Lista ${escapeHtml(catObj.name)}</h2>
       <table>
         <thead>
@@ -687,6 +781,7 @@ export function initTicketApp() {
         </tbody>
       </table>
     `;
+    }
     return wrap;
   }
   async function exportCategoryImages() {
@@ -791,7 +886,7 @@ export function initTicketApp() {
     }
   }, true);
 
-  // Abrir editor de porcentajes
+  // Abrir editor de producto
   document.getElementById('tbl').addEventListener('click', (ev) => {
     const btn = ev.target.closest('.btn-split');
     if (!btn) return;
@@ -800,13 +895,14 @@ export function initTicketApp() {
     if (!tr) return;
     const key = tr.getAttribute('data-key');
     if (!key) return;
-    openSplitEditor(key);
+    openRowEditor(key);
   });
 
   /* ------------ CLIC EN FILA (asignación) ------------ */
   document.getElementById('tbl').addEventListener('click', (ev) => {
     const tr = ev.target.closest('tr[data-key]');
     if (!tr) return;
+    if (tr.getAttribute('data-hidden') === '1') return;
     if (ev.target.closest('.btn-del')) return;
     if (ev.target.closest('.btn-split')) return;
     if (ev.target.closest('a.desc-link')) return;
@@ -1417,7 +1513,9 @@ export function initTicketApp() {
     const allocs = getAllocations(key);
     const byId = new Map(allocs.map(a => [a.id, a.pct]));
     if (list){
-      list.innerHTML = categories.map(c => {
+      list.innerHTML = categories
+        .filter(c => !c.noSplit)
+        .map(c => {
         const pct = byId.get(c.id) || 0;
         const value = pct > 0 ? formatPercent(pct) : '';
         return `<div class="split-row">
@@ -1449,15 +1547,20 @@ export function initTicketApp() {
   function saveSplitEditor(){
     if (!splitEditKey) return;
     const list = readSplitAllocations();
+    const locked = getAllocations(splitEditKey).filter(a => {
+      const c = getCategoryById(a.id);
+      return c && c.noSplit;
+    });
     const total = allocationTotal(list);
     if (total <= 0.2){
-      allocationMap.delete(splitEditKey);
+      if (locked.length) setAllocations(splitEditKey, locked);
+      else allocationMap.delete(splitEditKey);
     } else if (Math.abs(total - 100) > 0.2){
       const warn = document.getElementById('splitWarn');
       if (warn) warn.classList.remove('d-none');
       return;
     } else {
-      setAllocations(splitEditKey, list);
+      setAllocations(splitEditKey, list.concat(locked));
     }
     const totalCalc = setTable(baseItems);
     lastCalc = totalCalc;
@@ -1473,8 +1576,106 @@ export function initTicketApp() {
     if (splitModal) splitModal.hide();
   }
 
+  /* ------------ EDITAR PRODUCTO ------------ */
+  function initRowEditModal(){
+    if (rowEditModal) return;
+    const $modal = document.getElementById('rowEditModal');
+    if (!$modal) return;
+    rowEditModal = new Modal($modal, { backdrop: true, focus: true, keyboard: true });
+    $modal.addEventListener('hidden.bs.modal', () => { rowEditKey = null; });
+  }
+  function openRowEditor(key){
+    const it = itemsByKey.get(key);
+    if (!it) return;
+    rowEditKey = key;
+    initRowEditModal();
+    if (!rowEditModal) return;
+
+    const nameInput = document.getElementById('rowEditName');
+    const amtInput = document.getElementById('rowEditAmount');
+    if (nameInput) nameInput.value = it.description || '';
+    if (amtInput) amtInput.value = toEUR(Number(it.amount) || 0);
+    const delBtn = document.getElementById('rowEditDelete');
+    if (delBtn) {
+      delBtn.disabled = false;
+      delBtn.textContent = it.hidden ? '👁️ Mostrar' : '👁️‍🗨️✖ Ocultar';
+      delBtn.classList.toggle('btn-outline-danger', !it.hidden);
+      delBtn.classList.toggle('btn-outline-success', !!it.hidden);
+    }
+    rowEditModal.show();
+  }
+  function hideItemByKey(key){
+    const it = itemsByKey.get(key);
+    if (!it) return false;
+    it.hidden = true;
+    if (allocationMap.has(key)) allocationMap.delete(key);
+    return true;
+  }
+  function unhideItemByKey(key){
+    const it = itemsByKey.get(key);
+    if (!it) return false;
+    it.hidden = false;
+    return true;
+  }
+  function saveRowEditor(){
+    if (!rowEditKey) return;
+    const it = itemsByKey.get(rowEditKey);
+    if (!it) return;
+
+    const nameInput = document.getElementById('rowEditName');
+    const amtInput = document.getElementById('rowEditAmount');
+    const nextName = nameInput ? nameInput.value.trim() : '';
+    const nextAmt = amtInput ? sanitizeAmountInput(amtInput.value) : NaN;
+    if (!nextName) { alert('Introduce una descripción.'); return; }
+    if (!isFinite(nextAmt)) { alert('Importe inválido.'); return; }
+
+    const oldKey = rowEditKey;
+    it.description = nextName;
+    it.amount = Number(nextAmt.toFixed(2));
+    if (isFinite(it.quantity) && it.quantity > 0){
+      it.unit = Number((it.amount / it.quantity).toFixed(2));
+    }
+
+    const newKey = itemKey(it);
+    if (newKey !== oldKey){
+      const prev = getAllocations(oldKey);
+      if (prev.length) setAllocations(newKey, prev);
+      if (allocationMap.has(oldKey)) allocationMap.delete(oldKey);
+      rowEditKey = newKey;
+    }
+
+    const total = setTable(baseItems);
+    lastCalc = total;
+    setCheck(lastFilename || '', total);
+    if (rowEditModal) rowEditModal.hide();
+  }
+  function deleteRowEditor(){
+    if (!rowEditKey) return;
+    const it = itemsByKey.get(rowEditKey);
+    if (!it) return;
+    if (it.hidden) {
+      if (!unhideItemByKey(rowEditKey)) return;
+    } else {
+      const ok = confirm('¿Ocultar esta línea del ticket?');
+      if (!ok) return;
+      if (!hideItemByKey(rowEditKey)) return;
+    }
+    const total = setTable(baseItems);
+    lastCalc = total;
+    setCheck(lastFilename || '', total);
+    if (rowEditModal) rowEditModal.hide();
+  }
+
   /* ------------ EVENTOS ------------ */
   $file.addEventListener('change', processSelectedFile);
+  if ($btnToggleHidden){
+    $btnToggleHidden.addEventListener('click', () => {
+      showHidden = !showHidden;
+      const total = setTable(baseItems);
+      lastCalc = total;
+      setCheck(lastFilename || '', total);
+    });
+  }
 
   // Saneo en vivo del importe manual
   const $mfAmount = document.getElementById('mfAmount');
@@ -1488,6 +1689,14 @@ export function initTicketApp() {
     const n = sanitizeAmountInput($mfAmount.value);
     if (isFinite(n) && n > 0) $mfAmount.value = toEUR(n);
   });
+
+  const $rowEditAmount = document.getElementById('rowEditAmount');
+  if ($rowEditAmount){
+    $rowEditAmount.addEventListener('blur', () => {
+      const n = sanitizeAmountInput($rowEditAmount.value);
+      if (isFinite(n)) $rowEditAmount.value = toEUR(n);
+    });
+  }
 
   // Añadir línea manual
   document.getElementById('manualForm').addEventListener('submit', (ev) => {

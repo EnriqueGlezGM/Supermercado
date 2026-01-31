@@ -344,6 +344,12 @@ body { padding-top: 0; padding-bottom: calc(4.5rem + var(--safe-bottom)); }
 .cat-cell { white-space: nowrap; text-align:center; }
 .cat-dot { display:inline-block; width:10px; height:10px; border-radius:50%; border:1px solid rgba(0,0,0,.25); margin-right:.4rem; vertical-align:middle; }
 .cat-name { vertical-align:middle; }
+.row-hidden {
+  opacity: .55;
+}
+.row-hidden .td-desc .desc-text {
+  text-decoration: line-through;
+}
 
 /* --- Export card styles (restored) --- */
 .export-card {
