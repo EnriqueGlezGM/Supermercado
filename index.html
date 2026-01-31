@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="utf-8">
-<title>Lector ticket Mercadona</title>
+<title>Lector de tickets</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
 <!-- Modo oscuro automático -->
@@ -72,7 +72,14 @@ body.bg-light {
   backdrop-filter: blur(18px);
   box-shadow: var(--glass-shadow);
 }
-.mercadona-logo {
+.store-logos {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+.store-logo {
   display: block;
   max-width: 100%;         /* no superar el ancho de la burbuja */
   width: auto;
@@ -83,7 +90,10 @@ body.bg-light {
 }
 
 @media (max-width: 576px){
-  .mercadona-logo{
+  .store-logos{
+    gap: .75rem;
+  }
+  .store-logo{
     max-height: 72px;  /* un poco más bajo en móvil */
   }
 }
@@ -422,13 +432,16 @@ body { padding-top: 0; padding-bottom: calc(4.5rem + var(--safe-bottom)); }
 <div class="app-shell container py-4 pb-5">
 
   <header class="glass-header text-center mb-4">
-    <img src="https://cdn.worldvectorlogo.com/logos/mercadona.svg" alt="Mercadona" class="mercadona-logo">
+    <div class="store-logos">
+      <img src="https://www.freelogovectors.net/wp-content/uploads/2023/10/mercadonalogo-freelogovectors.net_.png" alt="Mercadona" class="store-logo mercadona-logo">
+      <img src="https://upload.wikimedia.org/wikipedia/commons/9/91/Lidl-Logo.svg" alt="Lidl" class="store-logo lidl-logo">
+    </div>
     <p class="glass-title mb-0 mt-3">Lector de tickets</p>
     <small id="progress" class="text-muted d-block mt-2"></small>
   </header>
 
   <!-- Selector de archivo -->
-  <input id="file" type="file" accept="application/pdf" class="form-control my-2">
+  <input id="file" type="file" accept="application/pdf,image/*" class="form-control my-2">
 
   <div id="meta" class="small text-muted"></div>
   <div id="check" class="mb-2"></div>
@@ -447,7 +460,7 @@ body { padding-top: 0; padding-bottom: calc(4.5rem + var(--safe-bottom)); }
           <th class="text-end" style="width:140px;">Importe (€)</th>
         </tr>
       </thead>
-      <tbody><tr><td colspan="4" class="text-muted">Selecciona un PDF…</td></tr></tbody>
+      <tbody><tr><td colspan="4" class="text-muted">Selecciona un PDF o imagen…</td></tr></tbody>
     </table>
   </div>
 
@@ -578,6 +591,7 @@ let lastCheckOk = null;
 let lastExpected = NaN;
 let lastCalc = NaN;
 let lastFilename = '';
+let lastStore = '';
 
 /* Reparto por fila (key -> [{id,pct}]) */
 const allocationMap = new Map();
@@ -941,7 +955,9 @@ document.addEventListener('click', (ev)=>{
 
 /* ------------ NUMÉRICO / FORMATO ------------ */
 const toNumberEUR = (s) => {
+  if (typeof s === "number") return isFinite(s) ? s : NaN;
   if (typeof s !== "string") s = String(s ?? "");
+  s = s.replace(/[−–—]/g, '-');
   s = s.replace(/\s+/g,"").replace(/[€\u0080]/g,"").replace(/\./g,"").replace(",",".");
   const n = Number(s);
   return isFinite(n) ? n : NaN;
@@ -992,7 +1008,8 @@ function normalizeDescKey(s){
   return s;
 }
 function buildSearchURL(desc){
-  const q = encodeURIComponent(`${String(desc||'').trim()} Mercadona`);
+  const store = lastStore ? ` ${lastStore}` : '';
+  const q = encodeURIComponent(`${String(desc||'').trim()}${store}`);
   return `https://www.google.com/search?tbm=isch&q=${q}`;
 }
 
@@ -1444,9 +1461,29 @@ async function pdfToTextLinesOCR(buf){
   return lines;
 }
 
+function fileToDataURL(file){
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error || new Error("No se pudo leer el archivo"));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function imageToTextLines(file){
+  if(!window.Tesseract) throw new Error("No se cargó Tesseract.js");
+  setProgress("OCR imagen…");
+  const dataUrl = await fileToDataURL(file);
+  const res = await Tesseract.recognize(dataUrl, 'spa+eng', { logger: () => {} });
+  const text = res.data && res.data.text ? res.data.text : "";
+  return text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
+}
+
 /* ------------ HEURÍSTICAS ------------ */
 function normalizeLine(s){
   s = String(s||"");
+  s = s.replace(/[−–—]/g, '-');
+  s = s.replace(/[×]/g, 'x');
   s = s.replace(/(\d)[oO](\d)/g, '$10$2');
   s = s.replace(/,(\d)[sS]\b/g, ',$15');
   s = s.replace(/,(\d)[oO]\b/g, ',$10');
@@ -1454,13 +1491,17 @@ function normalizeLine(s){
   s = s.replace(/\s{2,}/g,' ').trim();
   return s;
 }
+function normalizeAmountToken(val){
+  let out = String(val || '');
+  out = out.replace(/[−–—]/g, '-');
+  if (/,\d$/.test(out)) out = out + '0';
+  return out;
+}
 function findLastPrice(str){
   const s = normalizeLine(str);
-  const m = s.match(/(\d{1,3}(?:\.\d{3})*,\d{1,2})(?:\s*[€\u0080])?(?!.*\d)/);
+  const m = s.match(/(-?\d{1,3}(?:\.\d{3})*,\d{1,2})(?:\s*[€\u0080])?(?!.*\d)/);
   if (!m) return null;
-  let val = m[1];
-  if (/,\d$/.test(val)) val = val + '0';
-  return val;
+  return normalizeAmountToken(m[1]);
 }
 function nextNonEmpty(arr, i){
   let j = i+1;
@@ -1473,11 +1514,18 @@ function nextNonEmpty(arr, i){
 }
 function filterProductsSection(lines){
   const L = lines.map(s => normalizeLine(String(s||"").trim()));
-  const looksLikeProduct = (s, next) =>
-    /^\s*\d+\s+.+\s+\d+,\d{2}(?:\s+\d+,\d{2})?\s*$/.test(s) ||
-    (/^\D{2,}$/.test(s) && /\b(kg|g|l)\b.*\d+,\d{2}.*\d+,\d{2}/i.test(next||"")) ||
-    (/^\s*\d+\s+\D+/.test(s) && /\b(kg|g|l)\b.*\d+,\d{2}.*\d+,\d{2}/i.test((next||""))) ||
-    (/^\s*\d+\s+\D+/.test(s) && !!findLastPrice(next||""));
+  const looksLikeProduct = (s, next) => {
+    const row = s || "";
+    const nxt = next || "";
+    if (/^(TOTAL|ENTREGA|IMP\.|IVA|BASE IMPONIBLE|CUOTA)\b/i.test(row)) return false;
+    if (/^\s*\d+\s+.+\s+\d+,\d{2}(?:\s+\d+,\d{2})?\s*$/.test(row)) return true;
+    if (/^\D{2,}$/.test(row) && /\b(kg|g|l)\b.*\d+,\d{2}.*\d+,\d{2}/i.test(nxt)) return true;
+    if (/^\s*\d+\s+\D+/.test(row) && /\b(kg|g|l)\b.*\d+,\d{2}.*\d+,\d{2}/i.test(nxt)) return true;
+    if (/^\s*\d+\s+\D+/.test(row) && !!findLastPrice(nxt)) return true;
+    if (/^[A-ZÁÉÍÓÚÑ].*\d{1,3}(?:\.\d{3})*,\d{2}\s*(?:[A-Z])?\s*$/i.test(row)) return true;
+    if (/\bDESC(?:UENTO)?\.?/i.test(row) && /-?\d{1,3}(?:\.\d{3})*,\d{2}/.test(row)) return true;
+    return false;
+  };
 
   let start = -1, end = L.length;
   for (let i=0;i<L.length;i++){
@@ -1496,32 +1544,137 @@ function filterProductsSection(lines){
   return L.filter(Boolean);
 }
 function parseProducts(lines){
-  const isNoise = (s) => /(IVA\b|BASE IMPONIBLE|CUOTA\b|TARJ|MASTERCARD|EFECTIVO|FACTURA|SE ADMITEN DEVOLUCIONES|CAMBIO)/i.test(s);
+  const isNoise = (s) => /(IVA\b|BASE IMPONIBLE|CUOTA\b|TARJ|MASTERCARD|EFECTIVO|FACTURA|SE ADMITEN DEVOLUCIONES|CAMBIO|ENTREGA|RECIBO|AUTORIZ|IMP\.|DEVOLUCION|DEVOLUCIONES|HORARIO|ATENCION|GRACIAS)/i.test(s);
+  const isDiscountLine = (s) => /\bDESC(?:UENTO)?\.?/i.test(s);
+  const isWeightLine = (s) => /\b(kg|g|l)\b.*?(?:x|×)\s*-?\d{1,3}(?:\.\d{3})*,\d{2}/i.test(s);
+  const matchWeightLine = (s) => String(s||"").match(/^\s*([\d.,]+)\s*(kg|g|l)\b.*?(?:x|×)\s*(-?\d{1,3}(?:\.\d{3})*,\d{2})/i);
+  const shouldAttachDiscount = () => String(lastStore || '').toLowerCase() === 'lidl';
+  const parseDiscountPercent = (row) => {
+    const m = String(row || '').match(/(\d{1,2}(?:[.,]\d+)?)\s*%/);
+    if (!m) return NaN;
+    const n = Number(m[1].replace(",", "."));
+    return isFinite(n) ? n : NaN;
+  };
+  const parseWeightQty = (raw, unit) => {
+    let qty = Number(String(raw || "").replace(",", "."));
+    if (!isFinite(qty)) return NaN;
+    const u = String(unit || "").toLowerCase();
+    if (u === 'g') qty = qty / 1000;
+    return qty;
+  };
+  const extractDiscountAmount = (row) => {
+    if (/total/i.test(row)) return NaN;
+    const p = findLastPrice(row);
+    if (!p) return NaN;
+    let amountNum = toNumberEUR(p);
+    if (amountNum > 0 && !/[-−–—]/.test(p)) amountNum = -amountNum;
+    return amountNum;
+  };
   const clean = (s) => String(s||"").replace(/\s{2,}/g," ").trim();
+  const attachDiscountToRecent = (amountNum, lineIndex, row) => {
+    if (!out.length) return false;
+    for (let k = out.length - 1; k >= 0; k--) {
+      const it = out[k];
+      const idx = Number(it._lineIndex);
+      if (isFinite(idx) && (lineIndex - idx) > 4) break;
+      if (!isFinite(idx)) continue;
+      if ((lineIndex - idx) <= 4) {
+        const pct = parseDiscountPercent(row);
+        let discount = amountNum;
+        if (!isFinite(discount) && isFinite(pct)) {
+          discount = -Number(((Number(it.amount) || 0) * pct / 100).toFixed(2));
+        }
+        if (!isFinite(discount)) return false;
+        if (discount > 0) discount = -discount;
+        if (Math.abs(discount) > Math.abs(Number(it.amount) || 0) * 1.05 && isFinite(pct)) {
+          discount = -Number(((Number(it.amount) || 0) * pct / 100).toFixed(2));
+        }
+        if (Math.abs(discount) > Math.abs(Number(it.amount) || 0) * 1.05) return false;
+        it.amount = Number((Number(it.amount || 0) + discount).toFixed(2));
+        if (isFinite(it.quantity) && it.quantity > 0){
+          it.unit = Number((it.amount / it.quantity).toFixed(2));
+        }
+        return true;
+      }
+    }
+    return false;
+  };
+  const parseCombinedDiscountRow = (row, lineIndex) => {
+    if (!isDiscountLine(row)) return false;
+    if (/total/i.test(row)) return false;
+    const prices = row.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/g);
+    if (!prices || prices.length < 2) return false;
+    const discountToken = normalizeAmountToken(prices[prices.length - 1]);
+    let discount = toNumberEUR(discountToken);
+    if (discount > 0 && !/[-−–—]/.test(discountToken)) discount = -discount;
+    let baseToken = null;
+    for (const t of prices){
+      const tok = normalizeAmountToken(t);
+      const val = toNumberEUR(tok);
+      if (isFinite(val) && val > 0) { baseToken = tok; break; }
+    }
+    if (!baseToken) baseToken = normalizeAmountToken(prices[0]);
+    const baseVal = toNumberEUR(baseToken);
+    if (!isFinite(baseVal)) return false;
+    const pct = parseDiscountPercent(row);
+    if (Math.abs(discount) > Math.abs(baseVal) * 1.05 && isFinite(pct)) {
+      discount = -Number((baseVal * pct / 100).toFixed(2));
+    }
+    if (Math.abs(discount) > Math.abs(baseVal) * 1.05) return false;
+    let cut = row.indexOf(baseToken);
+    if (cut < 0) cut = row.lastIndexOf(baseToken);
+    let desc = row.substring(0, cut).trim();
+    let qty = 1;
+    const leadQty = desc.match(/^\s*(\d+)\s+/);
+    if (leadQty){
+      qty = Number(leadQty[1]);
+      desc = desc.substring(leadQty[0].length).trim();
+    }
+    if (!desc || desc.length < 2) return false;
+    const amount = Number((baseVal + discount).toFixed(2));
+    push(qty, desc, null, amount, lineIndex);
+    return true;
+  };
 
   const out = [];
-  const push = (q, d, u, a) => {
+  const push = (q, d, u, a, lineIndex) => {
     const quantity = Number(String(q).replace(",", "."));
-    const amount = toNumberEUR(a);
-    let unit = u ? toNumberEUR(u) : NaN;
+    const amount = (typeof a === "number") ? a : toNumberEUR(a);
+    let unit = (u !== null && u !== undefined) ? toNumberEUR(u) : NaN;
     if(!isFinite(unit) || unit<=0){ unit = quantity>0 ? amount/quantity : amount; }
     if(!isFinite(quantity) || quantity<=0 || !isFinite(amount)) return;
     if(!d || d.length<2) return;
-    out.push({quantity, description:d, unit:Number(unit.toFixed(2)), amount:Number(amount.toFixed(2))});
+    out.push({quantity, description:d, unit:Number(unit.toFixed(2)), amount:Number(amount.toFixed(2)), _lineIndex: lineIndex});
   };
 
   const N = lines.map(clean).map(normalizeLine).filter(Boolean);
 
+  let skipIdx = -1;
   for(let i=0;i<N.length;i++){
+    if (i === skipIdx) { skipIdx = -1; continue; }
     const row = N[i];
     if (/^TOTAL\b/i.test(row) || /^TOTAL\s*[:€]/i.test(row)) break;
-    if (isNoise(row)) continue;
+    const isDiscount = isDiscountLine(row);
+    if (isNoise(row) && !isDiscount) continue;
+    if (isWeightLine(row)) continue;
+    if (shouldAttachDiscount() && parseCombinedDiscountRow(row, i)) continue;
+    if (isDiscount && shouldAttachDiscount()){
+      let amountNum = extractDiscountAmount(row);
+      if (!isFinite(amountNum)) {
+        const { index: j, text: next } = nextNonEmpty(N, i);
+        if (j !== -1 && /^[^a-zA-Z]*-?\d{1,3}(?:\.\d{3})*,\d{1,2}\s*(?:[€\u0080])?\s*$/.test(next)) {
+          amountNum = extractDiscountAmount(next);
+          skipIdx = j;
+        }
+      }
+      if (attachDiscountToRecent(amountNum, i, row)) continue;
+    }
 
     let m = row.match(/^\s*(\d+)\s+(.+?)\s+(\d+,\d{2})(?:\s*[€\u0080])?\s+(\d+,\d{2})(?:\s*[€\u0080])?.*$/);
-    if(m){ push(m[1], m[2], m[3], m[4]); continue; }
+    if(m){ push(m[1], m[2], m[3], m[4], i); continue; }
 
     m = row.match(/^\s*(\d+)\s+(.+?)\s+(\d+,\d{2})(?:\s*[€\u0080])?.*$/);
-    if(m){ push(m[1], m[2], null, m[3]); continue; }
+    if(m){ push(m[1], m[2], null, m[3], i); continue; }
 
     if(/^\D{2,}$/.test(row)){
       const { index: j, text: next } = nextNonEmpty(N, i);
@@ -1529,7 +1682,7 @@ function parseProducts(lines){
         const m2 = next.match(/^\s*([\d.,]+)\s*(kg|g|l)\b.*?(\d+,\d{2}).*?(\d+,\d{2})\s*$/i);
         if(m2){
           const qtyW = Number(m2[1].replace(",", "."));
-          push(qtyW, row, m2[3], m2[4]);
+          push(qtyW, row, m2[3], m2[4], i);
           i = j;
           continue;
         }
@@ -1544,7 +1697,7 @@ function parseProducts(lines){
         const m2 = next.match(/^\s*([\d.,]+)\s*(kg|g|l)\b.*?(\d+,\d{2}).*?(\d+,\d{2})\s*$/i);
         if (m2){
           const qtyW = Number(m2[1].replace(",", "."));
-          push(qtyW, desc, m2[3], m2[4]);
+          push(qtyW, desc, m2[3], m2[4], i);
           i = j;
           continue;
         }
@@ -1560,35 +1713,62 @@ function parseProducts(lines){
       if (j !== -1) {
         const p = findLastPrice(next);
         if (p) {
-          push(qty, desc, null, p);
+          push(qty, desc, null, p, i);
           i = j;
           continue;
         }
       }
     }
 
-    const euros = row.match(/\d+,\d{2}/g);
+    // Lidl: "DESC 7,39 B" + (siguiente línea con kg x precio)
+    if (!/^\s*\d+\s+/.test(row)) {
+      m = row.match(/^\s*(.+?)\s+(-?\d{1,3}(?:\.\d{3})*,\d{2})\s*(?:[A-Z])?\s*$/i);
+      if (m) {
+        const desc = m[1].trim();
+        const amountToken = normalizeAmountToken(m[2]);
+        let amountNum = toNumberEUR(amountToken);
+        if (isDiscount && amountNum > 0 && !/[-−–—]/.test(m[2])) amountNum = -amountNum;
+        const { index: j, text: next } = nextNonEmpty(N, i);
+        const m2 = j !== -1 ? matchWeightLine(next) : null;
+        if (m2) {
+          const qtyW = parseWeightQty(m2[1], m2[2]);
+          if (isFinite(qtyW) && qtyW > 0) {
+            push(qtyW, desc, m2[3], amountNum, i);
+            i = j;
+            continue;
+          }
+        }
+        push(1, desc, null, amountNum, i);
+        continue;
+      }
+    }
+
+    const euros = row.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/g);
     if(euros && euros.length>=1){
-      const amount = euros[euros.length-1];
-      const unit = euros.length>=2 ? euros[euros.length-2] : null;
+      const amountToken = normalizeAmountToken(euros[euros.length-1]);
+      let amountNum = toNumberEUR(amountToken);
+      if (isDiscount && amountNum > 0 && !/[-−–—]/.test(amountToken)) amountNum = -amountNum;
+      const unit = euros.length>=2 ? normalizeAmountToken(euros[euros.length-2]) : null;
       const leadQty = row.match(/^\s*(\d+)\s+/);
       const qty = leadQty ? Number(leadQty[1]) : 1;
-      const cut = row.lastIndexOf(amount);
+      const cut = row.lastIndexOf(amountToken);
       let desc = row.substring(leadQty ? leadQty[0].length : 0, cut).trim();
-      if(!desc) desc = row.replace(new RegExp(amount+"\\s*$"), "").trim();
+      if(!desc) desc = row.replace(new RegExp(amountToken+"\\s*$"), "").trim();
       if (/^(TOTAL|IVA|BASE IMPONIBLE|CUOTA)\b/i.test(desc)) continue;
-      push(qty, desc, unit, amount);
+      push(qty, desc, unit, amountNum, i);
       continue;
     } else {
       const p = findLastPrice(row);
       if (p) {
+        let amountNum = toNumberEUR(p);
+        if (isDiscount && amountNum > 0 && !/[-−–—]/.test(p)) amountNum = -amountNum;
         const leadQty = row.match(/^\s*(\d+)\s+/);
         const qty = leadQty ? Number(leadQty[1]) : 1;
         const cut = row.lastIndexOf(p);
         let desc = row.substring(leadQty ? leadQty[0].length : 0, cut).trim();
         if(!desc) desc = row.replace(new RegExp(p+"\\s*$"), "").trim();
         if (!/^(TOTAL|IVA|BASE IMPONIBLE|CUOTA)\b/i.test(desc)) {
-          push(qty, desc, null, p);
+          push(qty, desc, null, amountNum, i);
           continue;
         }
       }
@@ -1597,11 +1777,17 @@ function parseProducts(lines){
   return out;
 }
 
-function extractMeta(lines){
+function detectStore(lines, filename){
+  const txt = `${(lines || []).join("\n")}\n${String(filename || "")}`;
+  if (/LIDL/i.test(txt)) return "Lidl";
+  if (/MERCADONA/i.test(txt)) return "Mercadona";
+  return "";
+}
+function extractMeta(lines, store){
   const txt = lines.join("\n");
   const date = (txt.match(/\b(\d{2}\/\d{2}\/\d{4})\b/)||[])[1] || "";
   const time = (txt.match(/\b(\d{2}:\d{2})\b/)||[])[1] || "";
-  const tienda = (txt.match(/MERCADONA/i) ? "Mercadona" : "");
+  const tienda = store || (txt.match(/LIDL/i) ? "Lidl" : (txt.match(/MERCADONA/i) ? "Mercadona" : ""));
   $meta.textContent = [tienda && `Comercio: ${tienda}`, (date||time) && `Fecha/Hora: ${date} ${time}`].filter(Boolean).join("\n");
 }
 
@@ -1609,19 +1795,27 @@ function extractMeta(lines){
 async function processSelectedFile(){
   const f = $file.files && $file.files[0];
   if(!f){ return; }
-  if(!/\.pdf$/i.test(f.name)){ alert("Debe ser un PDF."); return; }
+  const isPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+  const isImage = /^image\//i.test(f.type || '') || /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(f.name);
+  if(!isPdf && !isImage){ alert("Debe ser un PDF o imagen."); return; }
   try{
-    setProgress("Cargando PDF...");
-    const buf = new Uint8Array(await f.arrayBuffer());
     let lines = [];
-    const {lines: lns, textItems} = await pdfToTextLines(buf);
-    lines = lns;
-    if(!lines.length || textItems===0){
-      setProgress("Sin texto embebido. Haciendo OCR…");
-      lines = await pdfToTextLinesOCR(buf);
+    if (isPdf){
+      setProgress("Cargando PDF...");
+      const buf = new Uint8Array(await f.arrayBuffer());
+      const {lines: lns, textItems} = await pdfToTextLines(buf);
+      lines = lns;
+      if(!lines.length || textItems===0){
+        setProgress("Sin texto embebido. Haciendo OCR…");
+        lines = await pdfToTextLinesOCR(buf);
+      }
+    } else {
+      setProgress("Cargando imagen...");
+      lines = await imageToTextLines(f);
     }
     setProgress("Extrayendo productos…");
-    extractMeta(lines);
+    lastStore = detectStore(lines, f.name);
+    extractMeta(lines, lastStore);
     const section = filterProductsSection(lines);
     const items = parseProducts(section);
     allocationMap.clear();
@@ -1633,7 +1827,7 @@ async function processSelectedFile(){
     setProgress("");
   } catch (e){
     console.error(e);
-    alert("No se pudo procesar el PDF.");
+    alert("No se pudo procesar el archivo.");
     setProgress("");
   }
 }

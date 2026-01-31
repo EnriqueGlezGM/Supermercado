@@ -1,6 +1,6 @@
-# Lector de ticket (Mercadona)
+# Lector de tickets (Mercadona + Lidl)
 
-Una herramienta 100% en el navegador para **leer tickets de Mercadona en PDF**, extraer los productos, **repartirlos por categorías**, **validar el total** frente al que aparece en el nombre del archivo y **exportar un resumen como imagen**.
+Una herramienta 100% en el navegador para **leer tickets de Mercadona y Lidl (PDF o imagen)**, extraer los productos, **repartirlos por categorías**, **validar el total** frente al que aparece en el nombre del archivo y **exportar un resumen como imagen**.
 
 👉 **Demo**: [Lector](https://enriqueglezgm.github.io/mercadona/) 
 
@@ -8,7 +8,7 @@ Una herramienta 100% en el navegador para **leer tickets de Mercadona en PDF**, 
 
 ## Características
 
-- ✅ **Importa PDF** del ticket (texto embebido o escaneado).
+- ✅ **Importa PDF o imagen** del ticket (texto embebido o escaneado).
 - 🧾 **Extracción robusta**: maneja líneas por unidades y por peso/volumen.
 - 🏷️ **Categorías por fila**: Alberto / Kike / Común (con color de fondo sutil).
 - 📊 **Resumen por categorías** (contador y suma).
@@ -23,7 +23,7 @@ Una herramienta 100% en el navegador para **leer tickets de Mercadona en PDF**, 
 ## Cómo usar
 
 1. Abre la página: [Lector](https://enriqueglezgm.github.io/mercadona/) 
-2. Pulsa **Elegir archivo** y selecciona el PDF del ticket.  
+2. Pulsa **Elegir archivo** y selecciona el PDF o imagen del ticket.  
    - El procesamiento **empieza automáticamente**
 3. Clasifica cada producto en **Alberto / Kike / Común**.  
 4. Cuando todas las filas tengan categoría, pulsa **Exportar resumen por categorías** para descargar la imagen.
