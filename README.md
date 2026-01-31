@@ -22,7 +22,7 @@ Una herramienta 100% en el navegador para **leer tickets de Mercadona y Lidl (PD
 
 ## Cómo usar
 
-1. Abre la página: [Lector](https://enriqueglezgm.github.io/mercadona/)
+1. Abre la página: [Lector](https://enriqueglezgm.github.io/Supermercado/)
 2. Pulsa **Elegir archivo** y selecciona el PDF o imagen del ticket.
    - El procesamiento **empieza automáticamente**
 3. Clasifica cada producto en **Alberto / Kike / Común**.
@@ -36,16 +36,27 @@ Pon el **total del ticket** en el nombre (formato español), por ejemplo: "20250
 
 ---
 
-## Desarrollo (React + Vite)
+## Desarrollo local
 
-```bash
-npm install
-npm run dev
-```
+1. Instala dependencias:
+   ```bash
+   npm install
+   ```
+2. Ejecuta el servidor de desarrollo:
+   ```bash
+   npm run dev
+   ```
 
-Compilar para producción:
+## Deploy en GitHub Pages
 
-```bash
-npm run build
-npm run preview
-```
+1. Genera el build:
+   ```bash
+   npm run build
+   ```
+2. Publica la carpeta `dist` en GitHub Pages:
+   ```bash
+   npx gh-pages -d dist
+   ```
+3. En GitHub, ve a **Settings → Pages** y selecciona:
+   - Source: `gh-pages`
+   - Folder: `/ (root)`
