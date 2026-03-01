@@ -40,12 +40,12 @@ export function initTicketApp() {
 
   let lastCheckOk = null;
   let lastExpected = NaN;
-  let lastExpectedRaw = NaN;
-  let lastHiddenTotal = 0;
   let showHidden = false;
   let lastCalc = NaN;
   let lastFilename = '';
   let lastStore = '';
+  let manualExpectedTotal = NaN;
+  let manualTotalSuggestions = [];
 
   /* Reparto por fila (key -> [{id,pct}]) */
   const allocationMap = new Map();
@@ -104,7 +104,7 @@ export function initTicketApp() {
       const act = localStorage.getItem('mc_cats_active');
       categories = raw ? JSON.parse(raw) : defaultCategories();
       activeCategoryId = act || categories[0]?.id || null;
-    }catch(e){
+    }catch{
       categories = defaultCategories();
       activeCategoryId = categories[0]?.id || null;
     }
@@ -290,7 +290,7 @@ export function initTicketApp() {
     }
     catEditModal.show();
     // Enfocar el campo nombre tras abrir (evita quedarse "bloqueado" por falta de foco)
-    setTimeout(()=>{ try{ document.getElementById('catEditName')?.focus(); }catch(e){} }, 50);
+    setTimeout(()=>{ try{ document.getElementById('catEditName')?.focus(); }catch{ void 0; } }, 50);
   }
 
   function updateCatEditDeleteBtn(){
@@ -462,26 +462,102 @@ export function initTicketApp() {
     const m = String(name||"").match(/(\d{1,3}(?:\.\d{3})*,\d{2})/);
     return m ? toNumberEUR(m[1]) : NaN;
   }
+  function extractManualTotalSuggestions(lines){
+    const tokens = String((lines || []).join('\n')).match(/\b\d{1,3}(?:\.\d{3})*,\d{2}\b/g) || [];
+    const seen = new Set();
+    const values = [];
+    for (const token of tokens){
+      const n = toNumberEUR(token);
+      if (!isFinite(n) || n <= 0) continue;
+      const key = n.toFixed(2);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      values.push(Number(key));
+    }
+    values.sort((a, b) => b - a);
+    return values.slice(0, 3);
+  }
+  function renderManualTotalSuggestions(){
+    if (!manualTotalSuggestions.length) return '';
+    return `<div class="mt-2">
+      <div class="small text-muted mb-1">Sugerencias del ticket</div>
+      <div class="d-flex flex-wrap gap-2">
+        ${manualTotalSuggestions.map((val) => `
+          <button
+            type="button"
+            class="btn btn-sm btn-outline-secondary manual-total-suggestion"
+            data-total="${val.toFixed(2)}"
+          >${escapeHtml(toEUR(val))} €</button>
+        `).join('')}
+      </div>
+    </div>`;
+  }
   function setCheckNone(){ $check.innerHTML = '<span class="text-muted">— Validación pendiente —</span>'; }
   function setCheck(filename, totalCalc){
-    const expected = parseFilenameTotal(filename);
+    const filenameExpected = parseFilenameTotal(filename);
+    const expected = isFinite(filenameExpected) ? filenameExpected : manualExpectedTotal;
     const hiddenTotal = getHiddenTotal(baseItems.concat(manualItems));
-    lastHiddenTotal = hiddenTotal;
-    lastExpectedRaw = expected;
     const adjustedExpected = isFinite(expected) ? Number((expected - hiddenTotal).toFixed(2)) : NaN;
     let html = '';
     if (!isFinite(expected)) {
-      html = '<div class="alert alert-secondary py-2 my-2" role="alert">No se encontró importe en el nombre del archivo.</div>';
+      html = `<div class="alert alert-secondary py-2 my-2" role="alert">
+        <div class="fw-semibold mb-2">No se encontró importe en el nombre del archivo.</div>
+        <form id="manualTotalForm" class="row g-2 align-items-end">
+          <div class="col-12 col-sm-7">
+            <label for="manualTotalInput" class="form-label small mb-1">Total del ticket</label>
+            <div class="input-group">
+              <span class="input-group-text">€</span>
+              <input
+                id="manualTotalInput"
+                type="text"
+                class="form-control mono"
+                inputmode="decimal"
+                autocomplete="off"
+                placeholder="Ej. 44,66"
+                value=""
+              />
+            </div>
+          </div>
+          <div class="col-12 col-sm-5">
+            <button type="submit" class="btn btn-primary w-100">Usar este total</button>
+          </div>
+        </form>
+        ${renderManualTotalSuggestions()}
+      </div>`;
       lastCheckOk = null; lastExpected = NaN; lastCalc = Number(totalCalc)||NaN; lastFilename = filename || '';
     } else if (nearlyEqual(adjustedExpected, totalCalc)) {
+      const sourceLabel = isFinite(filenameExpected) ? `archivo: ${toEUR(filenameExpected)}` : `manual: ${toEUR(expected)}`;
       html = `<div class="alert alert-success fw-bold my-2" role="alert" style="font-size:1.05rem">
-        ✅ Coincide — <span class="fw-normal">archivo: ${toEUR(expected)}${hiddenTotal ? ` • ocultos: ${toEUR(hiddenTotal)}` : ''} • esperado: ${toEUR(adjustedExpected)} • calculado: ${toEUR(totalCalc)}</span>
+        ✅ Coincide — <span class="fw-normal">${sourceLabel}${hiddenTotal ? ` • ocultos: ${toEUR(hiddenTotal)}` : ''} • esperado: ${toEUR(adjustedExpected)} • calculado: ${toEUR(totalCalc)}</span>
       </div>`;
       lastCheckOk = true; lastExpected = Number(adjustedExpected); lastCalc = Number(totalCalc); lastFilename = filename || '';
     } else {
+      const sourceLabel = isFinite(filenameExpected) ? `archivo: ${toEUR(filenameExpected)}` : `manual: ${toEUR(expected)}`;
       html = `<div class="alert alert-danger fw-bold my-2" role="alert" style="font-size:1.05rem">
-        ❌ No coincide — <span class="fw-normal">archivo: ${toEUR(expected)}${hiddenTotal ? ` • ocultos: ${toEUR(hiddenTotal)}` : ''} • esperado: ${toEUR(adjustedExpected)} • calculado: ${toEUR(totalCalc)}</span>
+        ❌ No coincide — <span class="fw-normal">${sourceLabel}${hiddenTotal ? ` • ocultos: ${toEUR(hiddenTotal)}` : ''} • esperado: ${toEUR(adjustedExpected)} • calculado: ${toEUR(totalCalc)}</span>
       </div>`;
+      if (!isFinite(filenameExpected)) {
+        html += `<form id="manualTotalForm" class="row g-2 align-items-end mt-1">
+          <div class="col-12 col-sm-7">
+            <label for="manualTotalInput" class="form-label small mb-1">Corregir total del ticket</label>
+            <div class="input-group">
+              <span class="input-group-text">€</span>
+              <input
+                id="manualTotalInput"
+                type="text"
+                class="form-control mono"
+                inputmode="decimal"
+                autocomplete="off"
+                value="${escapeHtml(toEUR(expected))}"
+              />
+            </div>
+          </div>
+          <div class="col-12 col-sm-5">
+            <button type="submit" class="btn btn-outline-primary w-100">Actualizar total</button>
+          </div>
+        </form>`;
+        html += renderManualTotalSuggestions();
+      }
       lastCheckOk = false; lastExpected = Number(adjustedExpected); lastCalc = Number(totalCalc); lastFilename = filename || '';
     }
     $check.innerHTML = html;
@@ -511,6 +587,80 @@ export function initTicketApp() {
       case 'eq': return '<span class="price-flag pf-eq" title="Mismo precio">⚖️</span>';
       default: return '';
     }
+  }
+  function getItemDiscountAmount(it){
+    const n = Number(it && it.discountAmount);
+    return isFinite(n) && n > 0 ? Number(n.toFixed(2)) : 0;
+  }
+  function hasItemDiscount(it){
+    return getItemDiscountAmount(it) > 0.004;
+  }
+  function getItemBaseAmount(it){
+    if (!it) return NaN;
+    const base = Number(it.baseAmount);
+    if (isFinite(base) && base >= 0) return Number(base.toFixed(2));
+    const amount = Number(it.amount) || 0;
+    const discount = getItemDiscountAmount(it);
+    return Number((amount + discount).toFixed(2));
+  }
+  function getDiscountLabels(it){
+    if (!it || !Array.isArray(it.discountLabels)) return [];
+    return it.discountLabels.filter(Boolean);
+  }
+  function getDiscountSummaryLabel(it){
+    const labels = Array.from(new Set(getDiscountLabels(it)));
+    if (!labels.length) return 'Descuento';
+    return labels.join(' + ');
+  }
+  function getDiscountBadgeLabel(it){
+    const label = getDiscountSummaryLabel(it);
+    if (/lidl\s*plus/i.test(label)) return 'Lidl Plus';
+    if (/promo/i.test(label)) return 'Promo';
+    return 'Desc.';
+  }
+  function applyDiscountToItem(it, discount, label){
+    if (!it) return false;
+    let discountNum = Number(discount);
+    if (!isFinite(discountNum) || Math.abs(discountNum) < 0.001) return false;
+    if (discountNum > 0) discountNum = -discountNum;
+    const currentAmount = Number(it.amount) || 0;
+    if (Math.abs(discountNum) > Math.abs(currentAmount) * 1.05) return false;
+    const nextAmount = Number((currentAmount + discountNum).toFixed(2));
+    if (nextAmount < -0.01) return false;
+    const baseAmount = hasItemDiscount(it) ? getItemBaseAmount(it) : currentAmount;
+    it.baseAmount = Number(baseAmount.toFixed(2));
+    it.discountAmount = Number((getItemDiscountAmount(it) + Math.abs(discountNum)).toFixed(2));
+    const labels = Array.isArray(it.discountLabels) ? it.discountLabels.slice() : [];
+    if (label) labels.push(String(label).trim());
+    it.discountLabels = Array.from(new Set(labels.filter(Boolean)));
+    it.amount = nextAmount;
+    if (isFinite(it.quantity) && it.quantity > 0){
+      it.unit = Number((it.amount / it.quantity).toFixed(2));
+    }
+    return true;
+  }
+  function renderDiscountBadge(it){
+    if (!hasItemDiscount(it)) return '';
+    const title = `${getDiscountSummaryLabel(it)}: -${toEUR(getItemDiscountAmount(it))} €`;
+    return `<span class="discount-badge" title="${escapeHtml(title)}">${escapeHtml(getDiscountBadgeLabel(it))}</span>`;
+  }
+  function renderDiscountMeta(it){
+    if (!hasItemDiscount(it)) return '';
+    const label = escapeHtml(getDiscountSummaryLabel(it));
+    const base = getItemBaseAmount(it);
+    const baseInfo = isFinite(base)
+      ? ` <span class="discount-base">antes ${toEUR(base)} €</span>`
+      : '';
+    return `<div class="discount-note">${label}: -${toEUR(getItemDiscountAmount(it))} €${baseInfo}</div>`;
+  }
+  function renderAmountCell(it){
+    const amount = Number(it && it.amount) || 0;
+    if (!hasItemDiscount(it)) return toEUR(amount);
+    const base = getItemBaseAmount(it);
+    return `<div class="amount-stack">
+      <div class="amount-final">${toEUR(amount)}</div>
+      ${isFinite(base) ? `<div class="amount-base">antes ${toEUR(base)} €</div>` : ''}
+    </div>`;
   }
 
   function renderAllocationsCell(allocs){
@@ -642,6 +792,8 @@ export function initTicketApp() {
       const rowClass = hidden ? `row-hidden${rowClassBase ? ' ' + rowClassBase : ''}` : rowClassBase;
       const role = (roleByKey.get(key) || '');
       const flag = priceFlagForRole(role);
+      const discountBadge = renderDiscountBadge(r);
+      const discountMeta = renderDiscountMeta(r);
       const catCell = hidden ? '<span class="text-muted">Oculto</span>' : renderAllocationsCell(allocs);
 
       html += `<tr data-key="${escapeHtml(key)}"
@@ -661,14 +813,18 @@ export function initTicketApp() {
           </div>
         </td>
         <td class="td-desc">
-          <a class="desc-link" href="${buildSearchURL(r.description)}" target="_blank" rel="noopener">
-            ${flag}<span class="desc-text">${escapeHtml(r.description)}</span>
-          </a>
+          <div class="desc-content">
+            <a class="desc-link" href="${buildSearchURL(r.description)}" target="_blank" rel="noopener">
+              ${flag}<span class="desc-text">${escapeHtml(r.description)}</span>
+            </a>
+            ${discountBadge}
+          </div>
+          ${discountMeta}
         </td>
       <td class="cat-cell">
         ${catCell}
       </td>
-      <td class="text-end mono">${toEUR(r.amount)}</td>
+      <td class="text-end mono">${renderAmountCell(r)}</td>
     </tr>`;
     }
   html += `<tr class="table-light">
@@ -726,7 +882,7 @@ export function initTicketApp() {
       const old = tag.innerHTML;
       tag.innerHTML = old + ' <span class="ms-1">📋</span>';
       setTimeout(() => { tag.innerHTML = old; }, 1000);
-    } catch(e){
+    } catch {
       alert('No se pudo copiar al portapapeles');
     }
   });
@@ -1091,10 +1247,12 @@ export function initTicketApp() {
   }
   function parseProducts(lines){
     const isNoise = (s) => /(IVA\b|BASE IMPONIBLE|CUOTA\b|TARJ|MASTERCARD|EFECTIVO|FACTURA|SE ADMITEN DEVOLUCIONES|CAMBIO|ENTREGA|RECIBO|AUTORIZ|IMP\.|DEVOLUCION|DEVOLUCIONES|HORARIO|ATENCION|GRACIAS)/i.test(s);
-    const isDiscountLine = (s) => /\bDESC(?:UENTO)?\.?/i.test(s);
+    const isLidlPlusPromoLine = (s) => /\bPROMO\s+LIDL\s+PLUS\b/i.test(s);
+    const isDiscountLine = (s) => /\b(?:DESC(?:UENTO)?\.?|PROMO\s+LIDL\s+PLUS)\b/i.test(s);
     const isWeightLine = (s) => /\b(kg|g|l)\b.*?(?:x|×)\s*-?\d{1,3}(?:\.\d{3})*,\d{2}/i.test(s);
     const matchWeightLine = (s) => String(s||"").match(/^\s*([\d.,]+)\s*(kg|g|l)\b.*?(?:x|×)\s*(-?\d{1,3}(?:\.\d{3})*,\d{2})/i);
     const shouldAttachDiscount = () => String(lastStore || '').toLowerCase() === 'lidl';
+    const getDiscountLineLabel = (row) => isLidlPlusPromoLine(row) ? 'Promo Lidl Plus' : 'Descuento';
     const parseDiscountPercent = (row) => {
       const m = String(row || '').match(/(\d{1,2}(?:[.,]\d+)?)\s*%/);
       if (!m) return NaN;
@@ -1117,30 +1275,29 @@ export function initTicketApp() {
       return amountNum;
     };
     const clean = (s) => String(s||"").replace(/\s{2,}/g," ").trim();
-    const attachDiscountToRecent = (amountNum, lineIndex, row) => {
+    const attachDiscountToRecent = (amountNum, lineIndex, row, options = {}) => {
       if (!out.length) return false;
+      const immediateOnly = !!options.immediateOnly;
+      const startIndex = out.length - 1;
       for (let k = out.length - 1; k >= 0; k--) {
+        if (immediateOnly && k !== startIndex) break;
         const it = out[k];
         const idx = Number(it._lineIndex);
-        if (isFinite(idx) && (lineIndex - idx) > 4) break;
+        if (!immediateOnly && isFinite(idx) && (lineIndex - idx) > 4) break;
         if (!isFinite(idx)) continue;
-        if ((lineIndex - idx) <= 4) {
+        if (immediateOnly || (lineIndex - idx) <= 4) {
           const pct = parseDiscountPercent(row);
           let discount = amountNum;
+          const currentAmount = Number(it.amount) || 0;
           if (!isFinite(discount) && isFinite(pct)) {
-            discount = -Number(((Number(it.amount) || 0) * pct / 100).toFixed(2));
+            discount = -Number((currentAmount * pct / 100).toFixed(2));
           }
           if (!isFinite(discount)) return false;
           if (discount > 0) discount = -discount;
-          if (Math.abs(discount) > Math.abs(Number(it.amount) || 0) * 1.05 && isFinite(pct)) {
-            discount = -Number(((Number(it.amount) || 0) * pct / 100).toFixed(2));
+          if (Math.abs(discount) > Math.abs(currentAmount) * 1.05 && isFinite(pct)) {
+            discount = -Number((currentAmount * pct / 100).toFixed(2));
           }
-          if (Math.abs(discount) > Math.abs(Number(it.amount) || 0) * 1.05) return false;
-          it.amount = Number((Number(it.amount || 0) + discount).toFixed(2));
-          if (isFinite(it.quantity) && it.quantity > 0){
-            it.unit = Number((it.amount / it.quantity).toFixed(2));
-          }
-          return true;
+          return applyDiscountToItem(it, discount, getDiscountLineLabel(row));
         }
       }
       return false;
@@ -1178,7 +1335,12 @@ export function initTicketApp() {
       }
       if (!desc || desc.length < 2) return false;
       const amount = Number((baseVal + discount).toFixed(2));
-      push(qty, desc, null, amount, lineIndex);
+      const item = push(qty, desc, null, amount, lineIndex);
+      if (item && Math.abs(discount) > 0.001) {
+        item.baseAmount = Number(baseVal.toFixed(2));
+        item.discountAmount = Number(Math.abs(discount).toFixed(2));
+        item.discountLabels = [getDiscountLineLabel(row)];
+      }
       return true;
     };
 
@@ -1188,9 +1350,11 @@ export function initTicketApp() {
       const amount = (typeof a === "number") ? a : toNumberEUR(a);
       let unit = (u !== null && u !== undefined) ? toNumberEUR(u) : NaN;
       if(!isFinite(unit) || unit<=0){ unit = quantity>0 ? amount/quantity : amount; }
-      if(!isFinite(quantity) || quantity<=0 || !isFinite(amount)) return;
-      if(!d || d.length<2) return;
-      out.push({quantity, description:d, unit:Number(unit.toFixed(2)), amount:Number(amount.toFixed(2)), _lineIndex: lineIndex});
+      if(!isFinite(quantity) || quantity<=0 || !isFinite(amount)) return null;
+      if(!d || d.length<2) return null;
+      const item = {quantity, description:d, unit:Number(unit.toFixed(2)), amount:Number(amount.toFixed(2)), _lineIndex: lineIndex};
+      out.push(item);
+      return item;
     };
 
     const N = lines.map(clean).map(normalizeLine).filter(Boolean);
@@ -1205,6 +1369,7 @@ export function initTicketApp() {
       if (isWeightLine(row)) continue;
       if (shouldAttachDiscount() && parseCombinedDiscountRow(row, i)) continue;
       if (isDiscount && shouldAttachDiscount()){
+        const isLidlPlusPromo = isLidlPlusPromoLine(row);
         let amountNum = extractDiscountAmount(row);
         if (!isFinite(amountNum)) {
           const { index: j, text: next } = nextNonEmpty(N, i);
@@ -1213,7 +1378,8 @@ export function initTicketApp() {
             skipIdx = j;
           }
         }
-        if (attachDiscountToRecent(amountNum, i, row)) continue;
+        if (attachDiscountToRecent(amountNum, i, row, { immediateOnly: isLidlPlusPromo })) continue;
+        if (isLidlPlusPromo) continue;
       }
 
       let m = row.match(/^\s*(\d+)\s+(.+?)\s+(\d+,\d{2})(?:\s*[€\u0080])?\s+(\d+,\d{2})(?:\s*[€\u0080])?.*$/);
@@ -1345,6 +1511,8 @@ export function initTicketApp() {
     const isImage = /^image\//i.test(f.type || '') || /\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(f.name);
     if(!isPdf && !isImage){ alert("Debe ser un PDF o imagen."); return; }
     try{
+      manualExpectedTotal = NaN;
+      manualTotalSuggestions = [];
       let lines = [];
       if (isPdf){
         setProgress("Cargando PDF...");
@@ -1360,6 +1528,7 @@ export function initTicketApp() {
         lines = await imageToTextLines(f);
       }
       setProgress("Extrayendo productos…");
+      manualTotalSuggestions = extractManualTotalSuggestions(lines);
       lastStore = detectStore(lines, f.name);
       extractMeta(lines, lastStore);
       const section = filterProductsSection(lines);
@@ -1402,8 +1571,7 @@ export function initTicketApp() {
       msg.innerHTML = `<div class="alert alert-warning py-2 my-0" role="alert">
         Falta <strong>${toEUR(abs)}</strong> para cuadrar con el total del archivo.
       </div>`;
-      const valNow = toNumberEUR(amtInput.value);
-      if (!isFinite(valNow) || valNow <= 0) amtInput.value = toEUR(abs);
+      amtInput.value = toEUR(abs);
       document.getElementById('btnAddManual').disabled = false;
       box.classList.remove('d-none');
     } else if (sobra) {
@@ -1595,6 +1763,19 @@ export function initTicketApp() {
     const amtInput = document.getElementById('rowEditAmount');
     if (nameInput) nameInput.value = it.description || '';
     if (amtInput) amtInput.value = toEUR(Number(it.amount) || 0);
+    const discountWrap = document.getElementById('rowEditDiscountWrap');
+    const discountInfo = document.getElementById('rowEditDiscount');
+    if (discountWrap && discountInfo) {
+      if (hasItemDiscount(it)) {
+        const label = escapeHtml(getDiscountSummaryLabel(it));
+        const base = getItemBaseAmount(it);
+        discountInfo.innerHTML = `${label}: <strong>-${toEUR(getItemDiscountAmount(it))} €</strong>${isFinite(base) ? ` <span class="text-muted">sobre ${toEUR(base)} €</span>` : ''}`;
+        discountWrap.classList.remove('d-none');
+      } else {
+        discountInfo.textContent = '';
+        discountWrap.classList.add('d-none');
+      }
+    }
     const delBtn = document.getElementById('rowEditDelete');
     if (delBtn) {
       delBtn.disabled = false;
@@ -1632,6 +1813,9 @@ export function initTicketApp() {
     const oldKey = rowEditKey;
     it.description = nextName;
     it.amount = Number(nextAmt.toFixed(2));
+    if (hasItemDiscount(it)) {
+      it.baseAmount = Number((it.amount + getItemDiscountAmount(it)).toFixed(2));
+    }
     if (isFinite(it.quantity) && it.quantity > 0){
       it.unit = Number((it.amount / it.quantity).toFixed(2));
     }
@@ -1668,6 +1852,40 @@ export function initTicketApp() {
 
   /* ------------ EVENTOS ------------ */
   $file.addEventListener('change', processSelectedFile);
+  $check.addEventListener('submit', (ev) => {
+    const form = ev.target.closest('#manualTotalForm');
+    if (!form) return;
+    ev.preventDefault();
+    const input = form.querySelector('#manualTotalInput');
+    const nextTotal = input ? sanitizeAmountInput(input.value) : NaN;
+    if (!isFinite(nextTotal) || nextTotal <= 0) {
+      if (input) input.classList.add('is-invalid');
+      return;
+    }
+    manualExpectedTotal = Number(nextTotal.toFixed(2));
+    const total = isFinite(lastCalc) ? lastCalc : 0;
+    setCheck(lastFilename || '', total);
+  });
+  $check.addEventListener('input', (ev) => {
+    const input = ev.target.closest('#manualTotalInput');
+    if (!input) return;
+    input.classList.remove('is-invalid');
+  });
+  $check.addEventListener('click', (ev) => {
+    const btn = ev.target.closest('.manual-total-suggestion');
+    if (!btn) return;
+    const nextTotal = Number(btn.getAttribute('data-total'));
+    if (!isFinite(nextTotal) || nextTotal <= 0) return;
+    manualExpectedTotal = Number(nextTotal.toFixed(2));
+    const total = isFinite(lastCalc) ? lastCalc : 0;
+    setCheck(lastFilename || '', total);
+  });
+  $check.addEventListener('blur', (ev) => {
+    const input = ev.target.closest('#manualTotalInput');
+    if (!input) return;
+    const n = sanitizeAmountInput(input.value);
+    if (isFinite(n) && n > 0) input.value = toEUR(n);
+  }, true);
   if ($btnToggleHidden){
     $btnToggleHidden.addEventListener('click', () => {
       showHidden = !showHidden;
@@ -1748,7 +1966,7 @@ export function initTicketApp() {
           if (typeof $file.showPicker === 'function') $file.showPicker();
           else $file.click();
         }
-      } catch(e){}
+      } catch { void 0; }
     };
     setTimeout(openPicker, 300);
     const onceOpen = () => { openPicker(); window.removeEventListener('pointerdown', onceOpen); window.removeEventListener('keydown', onceOpen); };

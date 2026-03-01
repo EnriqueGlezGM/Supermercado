@@ -251,6 +251,10 @@ export default function App() {
                     Repartir %
                   </button>
                 </div>
+                <div className="col-12 d-none" id="rowEditDiscountWrap">
+                  <label htmlFor="rowEditDiscount" className="form-label small mb-1">Descuento aplicado</label>
+                  <div id="rowEditDiscount" className="ticket-discount-readout"></div>
+                </div>
               </form>
               <div className="form-text mt-2">Puedes cambiar el nombre, el importe u ocultar la línea.</div>
             </div>
