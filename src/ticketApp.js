@@ -1,12 +1,37 @@
-import { getDocument, GlobalWorkerOptions } from 'pdfjs-dist';
-import pdfWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import Tesseract from 'tesseract.js';
-import html2canvas from 'html2canvas';
 import { Modal } from 'bootstrap';
-
-GlobalWorkerOptions.workerSrc = pdfWorker;
+import { detectStore, extractTicketTotal, filterProductsSection, parseProducts } from './ticketParser';
 
 let initialized = false;
+let pdfJsLoadPromise = null;
+let tesseractLoadPromise = null;
+let html2canvasLoadPromise = null;
+
+async function loadPdfJs() {
+  if (!pdfJsLoadPromise) {
+    pdfJsLoadPromise = Promise.all([
+      import('pdfjs-dist'),
+      import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
+    ]).then(([pdfjs, worker]) => {
+      pdfjs.GlobalWorkerOptions.workerSrc = worker.default;
+      return pdfjs;
+    });
+  }
+  return pdfJsLoadPromise;
+}
+
+async function loadTesseract() {
+  if (!tesseractLoadPromise) {
+    tesseractLoadPromise = import('tesseract.js').then((mod) => mod.default || mod);
+  }
+  return tesseractLoadPromise;
+}
+
+async function loadHtml2canvas() {
+  if (!html2canvasLoadPromise) {
+    html2canvasLoadPromise = import('html2canvas').then((mod) => mod.default || mod);
+  }
+  return html2canvasLoadPromise;
+}
 
 export function initTicketApp() {
   if (initialized) return;
@@ -45,14 +70,20 @@ export function initTicketApp() {
   let lastFilename = '';
   let lastStore = '';
   let manualExpectedTotal = NaN;
+  let ticketExpectedTotal = NaN;
   let manualTotalSuggestions = [];
 
-  /* Reparto por fila (key -> [{id,pct}]) */
+  /* Reparto por fila (item.id -> [{id,pct}]) */
   const allocationMap = new Map();
   let currentItems = [];
   let itemsByKey = new Map();
   function itemKey(it) {
-    return [String(it.quantity), String(it.description), String(it.unit), String(it.amount)].join('|');
+    return String(it?.id || '');
+  }
+  function assignItemIds(items, prefix = 'item'){
+    (items || []).forEach((it, idx) => {
+      if (!it.id) it.id = `${prefix}-${idx}`;
+    });
   }
 
   /* Líneas manuales y base */
@@ -98,20 +129,50 @@ export function initTicketApp() {
     {id:'comun',   name:'Común',   color:'#ffc107', locked:true, noSplit:true}
     ];
   }
+  function normalizeStoredCategories(value){
+    const source = Array.isArray(value) ? value : [];
+    const seen = new Set();
+    const clean = [];
+    for (const raw of source){
+      if (!raw || typeof raw !== 'object') continue;
+      const name = String(raw.name || '').trim().slice(0, 40);
+      if (!name) continue;
+      const color = /^#[0-9a-f]{6}$/i.test(String(raw.color || '')) ? String(raw.color) : '#22c55e';
+      let id = String(raw.id || slugifyName(name) || `cat-${clean.length + 1}`).trim();
+      id = slugifyName(id) || slugifyName(name) || `cat-${clean.length + 1}`;
+      let unique = id;
+      let n = 2;
+      while (seen.has(unique)) unique = `${id}-${n++}`;
+      seen.add(unique);
+      clean.push({
+        id: unique,
+        name,
+        color,
+        locked: !!raw.locked,
+        noSplit: !!raw.noSplit,
+        masked: !!raw.masked
+      });
+    }
+    return clean.length ? clean : defaultCategories();
+  }
   function loadCategories(){
     try{
       const raw = localStorage.getItem('mc_cats');
       const act = localStorage.getItem('mc_cats_active');
-      categories = raw ? JSON.parse(raw) : defaultCategories();
-      activeCategoryId = act || categories[0]?.id || null;
+      categories = normalizeStoredCategories(raw ? JSON.parse(raw) : defaultCategories());
+      activeCategoryId = categories.some(c => c.id === act) ? act : (categories[0]?.id || null);
     }catch{
       categories = defaultCategories();
       activeCategoryId = categories[0]?.id || null;
     }
   }
   function saveCategories(){
-    localStorage.setItem('mc_cats', JSON.stringify(categories));
-    if (activeCategoryId !== null) localStorage.setItem('mc_cats_active', activeCategoryId);
+    try {
+      localStorage.setItem('mc_cats', JSON.stringify(categories));
+      if (activeCategoryId !== null) localStorage.setItem('mc_cats_active', activeCategoryId);
+    } catch {
+      void 0;
+    }
   }
   function setActiveCategory(id){
     activeCategoryId = id || null;
@@ -463,9 +524,14 @@ export function initTicketApp() {
     return m ? toNumberEUR(m[1]) : NaN;
   }
   function extractManualTotalSuggestions(lines){
+    const detectedTotal = extractTicketTotal(lines);
     const tokens = String((lines || []).join('\n')).match(/\b\d{1,3}(?:\.\d{3})*,\d{2}\b/g) || [];
     const seen = new Set();
     const values = [];
+    if (isFinite(detectedTotal) && detectedTotal > 0) {
+      seen.add(detectedTotal.toFixed(2));
+      values.push(Number(detectedTotal.toFixed(2)));
+    }
     for (const token of tokens){
       const n = toNumberEUR(token);
       if (!isFinite(n) || n <= 0) continue;
@@ -493,9 +559,17 @@ export function initTicketApp() {
     </div>`;
   }
   function setCheckNone(){ $check.innerHTML = '<span class="text-muted">— Validación pendiente —</span>'; }
+  function expectedSourceLabel(filenameExpected, expected){
+    if (isFinite(filenameExpected)) return `archivo: ${toEUR(filenameExpected)}`;
+    if (isFinite(manualExpectedTotal)) return `manual: ${toEUR(expected)}`;
+    if (isFinite(ticketExpectedTotal)) return `ticket: ${toEUR(expected)}`;
+    return `manual: ${toEUR(expected)}`;
+  }
   function setCheck(filename, totalCalc){
     const filenameExpected = parseFilenameTotal(filename);
-    const expected = isFinite(filenameExpected) ? filenameExpected : manualExpectedTotal;
+    const expected = isFinite(filenameExpected)
+      ? filenameExpected
+      : (isFinite(manualExpectedTotal) ? manualExpectedTotal : ticketExpectedTotal);
     const hiddenTotal = getHiddenTotal(baseItems.concat(manualItems));
     const adjustedExpected = isFinite(expected) ? Number((expected - hiddenTotal).toFixed(2)) : NaN;
     let html = '';
@@ -526,13 +600,13 @@ export function initTicketApp() {
       </div>`;
       lastCheckOk = null; lastExpected = NaN; lastCalc = Number(totalCalc)||NaN; lastFilename = filename || '';
     } else if (nearlyEqual(adjustedExpected, totalCalc)) {
-      const sourceLabel = isFinite(filenameExpected) ? `archivo: ${toEUR(filenameExpected)}` : `manual: ${toEUR(expected)}`;
+      const sourceLabel = expectedSourceLabel(filenameExpected, expected);
       html = `<div class="alert alert-success fw-bold my-2" role="alert" style="font-size:1.05rem">
         ✅ Coincide — <span class="fw-normal">${sourceLabel}${hiddenTotal ? ` • ocultos: ${toEUR(hiddenTotal)}` : ''} • esperado: ${toEUR(adjustedExpected)} • calculado: ${toEUR(totalCalc)}</span>
       </div>`;
       lastCheckOk = true; lastExpected = Number(adjustedExpected); lastCalc = Number(totalCalc); lastFilename = filename || '';
     } else {
-      const sourceLabel = isFinite(filenameExpected) ? `archivo: ${toEUR(filenameExpected)}` : `manual: ${toEUR(expected)}`;
+      const sourceLabel = expectedSourceLabel(filenameExpected, expected);
       html = `<div class="alert alert-danger fw-bold my-2" role="alert" style="font-size:1.05rem">
         ❌ No coincide — <span class="fw-normal">${sourceLabel}${hiddenTotal ? ` • ocultos: ${toEUR(hiddenTotal)}` : ''} • esperado: ${toEUR(adjustedExpected)} • calculado: ${toEUR(totalCalc)}</span>
       </div>`;
@@ -618,27 +692,6 @@ export function initTicketApp() {
     if (/promo/i.test(label)) return 'Promo';
     return 'Desc.';
   }
-  function applyDiscountToItem(it, discount, label){
-    if (!it) return false;
-    let discountNum = Number(discount);
-    if (!isFinite(discountNum) || Math.abs(discountNum) < 0.001) return false;
-    if (discountNum > 0) discountNum = -discountNum;
-    const currentAmount = Number(it.amount) || 0;
-    if (Math.abs(discountNum) > Math.abs(currentAmount) * 1.05) return false;
-    const nextAmount = Number((currentAmount + discountNum).toFixed(2));
-    if (nextAmount < -0.01) return false;
-    const baseAmount = hasItemDiscount(it) ? getItemBaseAmount(it) : currentAmount;
-    it.baseAmount = Number(baseAmount.toFixed(2));
-    it.discountAmount = Number((getItemDiscountAmount(it) + Math.abs(discountNum)).toFixed(2));
-    const labels = Array.isArray(it.discountLabels) ? it.discountLabels.slice() : [];
-    if (label) labels.push(String(label).trim());
-    it.discountLabels = Array.from(new Set(labels.filter(Boolean)));
-    it.amount = nextAmount;
-    if (isFinite(it.quantity) && it.quantity > 0){
-      it.unit = Number((it.amount / it.quantity).toFixed(2));
-    }
-    return true;
-  }
   function renderDiscountBadge(it){
     if (!hasItemDiscount(it)) return '';
     const title = `${getDiscountSummaryLabel(it)}: -${toEUR(getItemDiscountAmount(it))} €`;
@@ -708,6 +761,7 @@ export function initTicketApp() {
     if (Array.isArray(manualItems) && manualItems.length){
       items = items.concat(manualItems);
     }
+    assignItemIds(items);
     const hiddenCount = items.filter(it => isHidden(it)).length;
     const hiddenTotal = getHiddenTotal(items);
     const visibleItems = items.filter(it => !isHidden(it));
@@ -941,6 +995,7 @@ export function initTicketApp() {
     return wrap;
   }
   async function exportCategoryImages() {
+    const html2canvas = await loadHtml2canvas();
     if (!html2canvas) { alert('No se pudo cargar html2canvas.'); return; }
     if (lastCheckOk === false) {
       const msg = `⚠️ El total calculado (${toEUR(lastCalc)}) NO coincide con el del archivo (${toEUR(lastExpected)}).\n\n¿Quieres exportar igualmente?`;
@@ -991,27 +1046,39 @@ export function initTicketApp() {
     }
     if (!added) { alert('No hay categorías con elementos para exportar.'); return; }
 
-    $exportRoot.appendChild(wrapper);
-    const canvas = await html2canvas(wrapper, { backgroundColor: '#ffffff', scale: 2, useCORS: true });
-    const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
-    const url = URL.createObjectURL(blob);
-    // Abrir una nueva pestaña con la imagen generada
-    const win = window.open();
-    if (win) {
-      const img = new Image();
-      img.src = url;
-      img.style.maxWidth = '100%';
-      img.style.height = 'auto';
-      img.style.display = 'block';
-      img.style.margin = '0 auto';
-      win.document.title = 'Resumen de categorías';
-      win.document.body.style.margin = '0';
-      win.document.body.style.background = '#fff';
-      win.document.body.appendChild(img);
-    } else {
-      alert('El navegador bloqueó la ventana emergente. Permite pop-ups para ver la imagen.');
+    let url = '';
+    try {
+      $exportRoot.appendChild(wrapper);
+      const canvas = await html2canvas(wrapper, { backgroundColor: '#ffffff', scale: 2, useCORS: true });
+      const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+      url = URL.createObjectURL(blob);
+      const win = window.open();
+      if (win) {
+        const objectUrl = url;
+        const img = new Image();
+        img.onload = () => {
+          URL.revokeObjectURL(objectUrl);
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(objectUrl);
+        };
+        img.src = objectUrl;
+        img.style.maxWidth = '100%';
+        img.style.height = 'auto';
+        img.style.display = 'block';
+        img.style.margin = '0 auto';
+        url = '';
+        win.document.title = 'Resumen de categorías';
+        win.document.body.style.margin = '0';
+        win.document.body.style.background = '#fff';
+        win.document.body.appendChild(img);
+      } else {
+        alert('El navegador bloqueó la ventana emergente. Permite pop-ups para ver la imagen.');
+      }
+    } finally {
+      if (url) URL.revokeObjectURL(url);
+      wrapper.remove();
     }
-    wrapper.remove();
   }
 
   /* ------------ ESTADO EXPORT & ENLACE DESC ------------ */
@@ -1115,6 +1182,7 @@ export function initTicketApp() {
 
   /* ------------ PDF -> TEXTO ------------ */
   async function pdfToTextLines(buf){
+    const { getDocument } = await loadPdfJs();
     const pdf = await getDocument({data: buf}).promise;
     const lines = [];
     let textItems = 0;
@@ -1142,6 +1210,8 @@ export function initTicketApp() {
 
   /* ------------ OCR (fallback) ------------ */
   async function pdfToTextLinesOCR(buf){
+    const { getDocument } = await loadPdfJs();
+    const Tesseract = await loadTesseract();
     if(!Tesseract) throw new Error("No se cargó Tesseract.js");
     const pdf = await getDocument({data: buf}).promise;
     const lines = [];
@@ -1173,6 +1243,7 @@ export function initTicketApp() {
   }
 
   async function imageToTextLines(file){
+    const Tesseract = await loadTesseract();
     if(!Tesseract) throw new Error("No se cargó Tesseract.js");
     setProgress("OCR imagen…");
     const dataUrl = await fileToDataURL(file);
@@ -1181,320 +1252,6 @@ export function initTicketApp() {
     return text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean);
   }
 
-  /* ------------ HEURÍSTICAS ------------ */
-  function normalizeLine(s){
-    s = String(s||"");
-    s = s.replace(/[−–—]/g, '-');
-    s = s.replace(/[×]/g, 'x');
-    s = s.replace(/(\d)[oO](\d)/g, '$10$2');
-    s = s.replace(/,(\d)[sS]\b/g, ',$15');
-    s = s.replace(/,(\d)[oO]\b/g, ',$10');
-    s = s.replace(/\s*[€\u0080]\s*/g, ' €');
-    s = s.replace(/\s{2,}/g,' ').trim();
-    return s;
-  }
-  function normalizeAmountToken(val){
-    let out = String(val || '');
-    out = out.replace(/[−–—]/g, '-');
-    if (/,\d$/.test(out)) out = out + '0';
-    return out;
-  }
-  function findLastPrice(str){
-    const s = normalizeLine(str);
-    const m = s.match(/(-?\d{1,3}(?:\.\d{3})*,\d{1,2})(?:\s*[€\u0080])?(?!.*\d)/);
-    if (!m) return null;
-    return normalizeAmountToken(m[1]);
-  }
-  function nextNonEmpty(arr, i){
-    let j = i+1;
-    while(j < arr.length){
-      const s = String(arr[j]||"").trim();
-      if (s) return { index: j, text: s };
-      j++;
-    }
-    return { index: -1, text: "" };
-  }
-  function filterProductsSection(lines){
-    const L = lines.map(s => normalizeLine(String(s||"").trim()));
-    const looksLikeProduct = (s, next) => {
-      const row = s || "";
-      const nxt = next || "";
-      if (/^(TOTAL|ENTREGA|IMP\.|IVA|BASE IMPONIBLE|CUOTA)\b/i.test(row)) return false;
-      if (/^\s*\d+\s+.+\s+\d+,\d{2}(?:\s+\d+,\d{2})?\s*$/.test(row)) return true;
-      if (/^\D{2,}$/.test(row) && /\b(kg|g|l)\b.*\d+,\d{2}.*\d+,\d{2}/i.test(nxt)) return true;
-      if (/^\s*\d+\s+\D+/.test(row) && /\b(kg|g|l)\b.*\d+,\d{2}.*\d+,\d{2}/i.test(nxt)) return true;
-      if (/^\s*\d+\s+\D+/.test(row) && !!findLastPrice(nxt)) return true;
-      if (/^[A-ZÁÉÍÓÚÑ].*\d{1,3}(?:\.\d{3})*,\d{2}\s*(?:[A-Z])?\s*$/i.test(row)) return true;
-      if (/\bDESC(?:UENTO)?\.?/i.test(row) && /-?\d{1,3}(?:\.\d{3})*,\d{2}/.test(row)) return true;
-      return false;
-    };
-
-    let start = -1, end = L.length;
-    for (let i=0;i<L.length;i++){
-      const s = L[i] && L[i].trim();
-      if (!s) continue;
-      if (/^TOTAL\b/i.test(s) || /^TOTAL\s*[:€]/i.test(s) || /^TOTAL\s+(\d+|\d{1,3}(\.\d{3})*,\d{2})/i.test(s)) {
-        end = i; break;
-      }
-    }
-    for (let i=0;i<end;i++){
-      const s = L[i] && L[i].trim(); if(!s) continue;
-      const { text: next } = nextNonEmpty(L, i);
-      if (looksLikeProduct(s, next)) { start = i; break; }
-    }
-    if (start >= 0) return L.slice(start, end).filter(Boolean);
-    return L.filter(Boolean);
-  }
-  function parseProducts(lines){
-    const isNoise = (s) => /(IVA\b|BASE IMPONIBLE|CUOTA\b|TARJ|MASTERCARD|EFECTIVO|FACTURA|SE ADMITEN DEVOLUCIONES|CAMBIO|ENTREGA|RECIBO|AUTORIZ|IMP\.|DEVOLUCION|DEVOLUCIONES|HORARIO|ATENCION|GRACIAS)/i.test(s);
-    const isLidlPlusPromoLine = (s) => /\bPROMO\s+LIDL\s+PLUS\b/i.test(s);
-    const isDiscountLine = (s) => /\b(?:DESC(?:UENTO)?\.?|PROMO\s+LIDL\s+PLUS)\b/i.test(s);
-    const isWeightLine = (s) => /\b(kg|g|l)\b.*?(?:x|×)\s*-?\d{1,3}(?:\.\d{3})*,\d{2}/i.test(s);
-    const matchWeightLine = (s) => String(s||"").match(/^\s*([\d.,]+)\s*(kg|g|l)\b.*?(?:x|×)\s*(-?\d{1,3}(?:\.\d{3})*,\d{2})/i);
-    const shouldAttachDiscount = () => String(lastStore || '').toLowerCase() === 'lidl';
-    const getDiscountLineLabel = (row) => isLidlPlusPromoLine(row) ? 'Promo Lidl Plus' : 'Descuento';
-    const parseDiscountPercent = (row) => {
-      const m = String(row || '').match(/(\d{1,2}(?:[.,]\d+)?)\s*%/);
-      if (!m) return NaN;
-      const n = Number(m[1].replace(",", "."));
-      return isFinite(n) ? n : NaN;
-    };
-    const parseWeightQty = (raw, unit) => {
-      let qty = Number(String(raw || "").replace(",", "."));
-      if (!isFinite(qty)) return NaN;
-      const u = String(unit || "").toLowerCase();
-      if (u === 'g') qty = qty / 1000;
-      return qty;
-    };
-    const extractDiscountAmount = (row) => {
-      if (/total/i.test(row)) return NaN;
-      const p = findLastPrice(row);
-      if (!p) return NaN;
-      let amountNum = toNumberEUR(p);
-      if (amountNum > 0 && !/[-−–—]/.test(p)) amountNum = -amountNum;
-      return amountNum;
-    };
-    const clean = (s) => String(s||"").replace(/\s{2,}/g," ").trim();
-    const attachDiscountToRecent = (amountNum, lineIndex, row, options = {}) => {
-      if (!out.length) return false;
-      const immediateOnly = !!options.immediateOnly;
-      const startIndex = out.length - 1;
-      for (let k = out.length - 1; k >= 0; k--) {
-        if (immediateOnly && k !== startIndex) break;
-        const it = out[k];
-        const idx = Number(it._lineIndex);
-        if (!immediateOnly && isFinite(idx) && (lineIndex - idx) > 4) break;
-        if (!isFinite(idx)) continue;
-        if (immediateOnly || (lineIndex - idx) <= 4) {
-          const pct = parseDiscountPercent(row);
-          let discount = amountNum;
-          const currentAmount = Number(it.amount) || 0;
-          if (!isFinite(discount) && isFinite(pct)) {
-            discount = -Number((currentAmount * pct / 100).toFixed(2));
-          }
-          if (!isFinite(discount)) return false;
-          if (discount > 0) discount = -discount;
-          if (Math.abs(discount) > Math.abs(currentAmount) * 1.05 && isFinite(pct)) {
-            discount = -Number((currentAmount * pct / 100).toFixed(2));
-          }
-          return applyDiscountToItem(it, discount, getDiscountLineLabel(row));
-        }
-      }
-      return false;
-    };
-    const parseCombinedDiscountRow = (row, lineIndex) => {
-      if (!isDiscountLine(row)) return false;
-      if (/total/i.test(row)) return false;
-      const prices = row.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/g);
-      if (!prices || prices.length < 2) return false;
-      const discountToken = normalizeAmountToken(prices[prices.length - 1]);
-      let discount = toNumberEUR(discountToken);
-      if (discount > 0 && !/[-−–—]/.test(discountToken)) discount = -discount;
-      let baseToken = null;
-      for (const t of prices){
-        const tok = normalizeAmountToken(t);
-        const val = toNumberEUR(tok);
-        if (isFinite(val) && val > 0) { baseToken = tok; break; }
-      }
-      if (!baseToken) baseToken = normalizeAmountToken(prices[0]);
-      const baseVal = toNumberEUR(baseToken);
-      if (!isFinite(baseVal)) return false;
-      const pct = parseDiscountPercent(row);
-      if (Math.abs(discount) > Math.abs(baseVal) * 1.05 && isFinite(pct)) {
-        discount = -Number((baseVal * pct / 100).toFixed(2));
-      }
-      if (Math.abs(discount) > Math.abs(baseVal) * 1.05) return false;
-      let cut = row.indexOf(baseToken);
-      if (cut < 0) cut = row.lastIndexOf(baseToken);
-      let desc = row.substring(0, cut).trim();
-      let qty = 1;
-      const leadQty = desc.match(/^\s*(\d+)\s+/);
-      if (leadQty){
-        qty = Number(leadQty[1]);
-        desc = desc.substring(leadQty[0].length).trim();
-      }
-      if (!desc || desc.length < 2) return false;
-      const amount = Number((baseVal + discount).toFixed(2));
-      const item = push(qty, desc, null, amount, lineIndex);
-      if (item && Math.abs(discount) > 0.001) {
-        item.baseAmount = Number(baseVal.toFixed(2));
-        item.discountAmount = Number(Math.abs(discount).toFixed(2));
-        item.discountLabels = [getDiscountLineLabel(row)];
-      }
-      return true;
-    };
-
-    const out = [];
-    const push = (q, d, u, a, lineIndex) => {
-      const quantity = Number(String(q).replace(",", "."));
-      const amount = (typeof a === "number") ? a : toNumberEUR(a);
-      let unit = (u !== null && u !== undefined) ? toNumberEUR(u) : NaN;
-      if(!isFinite(unit) || unit<=0){ unit = quantity>0 ? amount/quantity : amount; }
-      if(!isFinite(quantity) || quantity<=0 || !isFinite(amount)) return null;
-      if(!d || d.length<2) return null;
-      const item = {quantity, description:d, unit:Number(unit.toFixed(2)), amount:Number(amount.toFixed(2)), _lineIndex: lineIndex};
-      out.push(item);
-      return item;
-    };
-
-    const N = lines.map(clean).map(normalizeLine).filter(Boolean);
-
-    let skipIdx = -1;
-    for(let i=0;i<N.length;i++){
-      if (i === skipIdx) { skipIdx = -1; continue; }
-      const row = N[i];
-      if (/^TOTAL\b/i.test(row) || /^TOTAL\s*[:€]/i.test(row)) break;
-      const isDiscount = isDiscountLine(row);
-      if (isNoise(row) && !isDiscount) continue;
-      if (isWeightLine(row)) continue;
-      if (shouldAttachDiscount() && parseCombinedDiscountRow(row, i)) continue;
-      if (isDiscount && shouldAttachDiscount()){
-        const isLidlPlusPromo = isLidlPlusPromoLine(row);
-        let amountNum = extractDiscountAmount(row);
-        if (!isFinite(amountNum)) {
-          const { index: j, text: next } = nextNonEmpty(N, i);
-          if (j !== -1 && /^[^a-zA-Z]*-?\d{1,3}(?:\.\d{3})*,\d{1,2}\s*(?:[€\u0080])?\s*$/.test(next)) {
-            amountNum = extractDiscountAmount(next);
-            skipIdx = j;
-          }
-        }
-        if (attachDiscountToRecent(amountNum, i, row, { immediateOnly: isLidlPlusPromo })) continue;
-        if (isLidlPlusPromo) continue;
-      }
-
-      let m = row.match(/^\s*(\d+)\s+(.+?)\s+(\d+,\d{2})(?:\s*[€\u0080])?\s+(\d+,\d{2})(?:\s*[€\u0080])?.*$/);
-      if(m){ push(m[1], m[2], m[3], m[4], i); continue; }
-
-      m = row.match(/^\s*(\d+)\s+(.+?)\s+(\d+,\d{2})(?:\s*[€\u0080])?.*$/);
-      if(m){ push(m[1], m[2], null, m[3], i); continue; }
-
-      if(/^\D{2,}$/.test(row)){
-        const { index: j, text: next } = nextNonEmpty(N, i);
-        if (j !== -1) {
-          const m2 = next.match(/^\s*([\d.,]+)\s*(kg|g|l)\b.*?(\d+,\d{2}).*?(\d+,\d{2})\s*$/i);
-          if(m2){
-            const qtyW = Number(m2[1].replace(",", "."));
-            push(qtyW, row, m2[3], m2[4], i);
-            i = j;
-            continue;
-          }
-        }
-      }
-
-      m = row.match(/^\s*(\d+)\s+(.+?)\s*$/);
-      if(m){
-        const desc = m[2];
-        const { index: j, text: next } = nextNonEmpty(N, i);
-        if (j !== -1) {
-          const m2 = next.match(/^\s*([\d.,]+)\s*(kg|g|l)\b.*?(\d+,\d{2}).*?(\d+,\d{2})\s*$/i);
-          if (m2){
-            const qtyW = Number(m2[1].replace(",", "."));
-            push(qtyW, desc, m2[3], m2[4], i);
-            i = j;
-            continue;
-          }
-        }
-      }
-
-      // "1 DESCRIPCIÓN" + siguiente con precio al final
-      m = row.match(/^\s*(\d+)\s+(.+?)\s*$/);
-      if (m) {
-        const qty = m[1];
-        const desc = m[2];
-        const { index: j, text: next } = nextNonEmpty(N, i);
-        if (j !== -1) {
-          const p = findLastPrice(next);
-          if (p) {
-            push(qty, desc, null, p, i);
-            i = j;
-            continue;
-          }
-        }
-      }
-
-      // Lidl: "DESC 7,39 B" + (siguiente línea con kg x precio)
-      if (!/^\s*\d+\s+/.test(row)) {
-        m = row.match(/^\s*(.+?)\s+(-?\d{1,3}(?:\.\d{3})*,\d{2})\s*(?:[A-Z])?\s*$/i);
-        if (m) {
-          const desc = m[1].trim();
-          const amountToken = normalizeAmountToken(m[2]);
-          let amountNum = toNumberEUR(amountToken);
-          if (isDiscount && amountNum > 0 && !/[-−–—]/.test(m[2])) amountNum = -amountNum;
-          const { index: j, text: next } = nextNonEmpty(N, i);
-          const m2 = j !== -1 ? matchWeightLine(next) : null;
-          if (m2) {
-            const qtyW = parseWeightQty(m2[1], m2[2]);
-            if (isFinite(qtyW) && qtyW > 0) {
-              push(qtyW, desc, m2[3], amountNum, i);
-              i = j;
-              continue;
-            }
-          }
-          push(1, desc, null, amountNum, i);
-          continue;
-        }
-      }
-
-      const euros = row.match(/-?\d{1,3}(?:\.\d{3})*,\d{2}/g);
-      if(euros && euros.length>=1){
-        const amountToken = normalizeAmountToken(euros[euros.length-1]);
-        let amountNum = toNumberEUR(amountToken);
-        if (isDiscount && amountNum > 0 && !/[-−–—]/.test(amountToken)) amountNum = -amountNum;
-        const unit = euros.length>=2 ? normalizeAmountToken(euros[euros.length-2]) : null;
-        const leadQty = row.match(/^\s*(\d+)\s+/);
-        const qty = leadQty ? Number(leadQty[1]) : 1;
-        const cut = row.lastIndexOf(amountToken);
-        let desc = row.substring(leadQty ? leadQty[0].length : 0, cut).trim();
-        if(!desc) desc = row.replace(new RegExp(amountToken+"\\s*$"), "").trim();
-        if (/^(TOTAL|IVA|BASE IMPONIBLE|CUOTA)\b/i.test(desc)) continue;
-        push(qty, desc, unit, amountNum, i);
-        continue;
-      } else {
-        const p = findLastPrice(row);
-        if (p) {
-          let amountNum = toNumberEUR(p);
-          if (isDiscount && amountNum > 0 && !/[-−–—]/.test(p)) amountNum = -amountNum;
-          const leadQty = row.match(/^\s*(\d+)\s+/);
-          const qty = leadQty ? Number(leadQty[1]) : 1;
-          const cut = row.lastIndexOf(p);
-          let desc = row.substring(leadQty ? leadQty[0].length : 0, cut).trim();
-          if(!desc) desc = row.replace(new RegExp(p+"\\s*$"), "").trim();
-          if (!/^(TOTAL|IVA|BASE IMPONIBLE|CUOTA)\b/i.test(desc)) {
-            push(qty, desc, null, amountNum, i);
-            continue;
-          }
-        }
-      }
-    }
-    return out;
-  }
-
-  function detectStore(lines, filename){
-    const txt = `${(lines || []).join("\n")}\n${String(filename || "")}`;
-    if (/LIDL/i.test(txt)) return "Lidl";
-    if (/MERCADONA/i.test(txt)) return "Mercadona";
-    return "";
-  }
   function extractMeta(lines, store){
     const txt = lines.join("\n");
     const date = (txt.match(/\b(\d{2}\/\d{2}\/\d{4})\b/)||[])[1] || "";
@@ -1512,6 +1269,7 @@ export function initTicketApp() {
     if(!isPdf && !isImage){ alert("Debe ser un PDF o imagen."); return; }
     try{
       manualExpectedTotal = NaN;
+      ticketExpectedTotal = NaN;
       manualTotalSuggestions = [];
       let lines = [];
       if (isPdf){
@@ -1528,15 +1286,19 @@ export function initTicketApp() {
         lines = await imageToTextLines(f);
       }
       setProgress("Extrayendo productos…");
-      manualTotalSuggestions = extractManualTotalSuggestions(lines);
       lastStore = detectStore(lines, f.name);
+      ticketExpectedTotal = extractTicketTotal(lines);
+      manualTotalSuggestions = extractManualTotalSuggestions(lines);
       extractMeta(lines, lastStore);
       const section = filterProductsSection(lines);
-      const items = parseProducts(section);
+      const items = parseProducts(section, { store: lastStore });
       allocationMap.clear();
       manualItems = [];
       baseItems = items.slice();
-      baseItems.forEach((it, idx) => { it.origIndex = idx; });
+      baseItems.forEach((it, idx) => {
+        it.id = `base-${idx}`;
+        it.origIndex = idx;
+      });
       const total = setTable(baseItems);
       setCheck(f.name, total);
       setProgress("");
@@ -1934,6 +1696,7 @@ export function initTicketApp() {
     }
 
     const it = {
+      id: 'manual-' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
       quantity: 1,
       description: desc,
       unit: amtNum,
@@ -1958,20 +1721,6 @@ export function initTicketApp() {
 
   // Export
   $btnExport.addEventListener('click', exportCategoryImages);
-
-  // Auto-abrir picker + inicializar
-    const openPicker = () => {
-      try {
-        if (!$file.files || $file.files.length === 0) {
-          if (typeof $file.showPicker === 'function') $file.showPicker();
-          else $file.click();
-        }
-      } catch { void 0; }
-    };
-    setTimeout(openPicker, 300);
-    const onceOpen = () => { openPicker(); window.removeEventListener('pointerdown', onceOpen); window.removeEventListener('keydown', onceOpen); };
-    window.addEventListener('pointerdown', onceOpen, { once:true });
-    window.addEventListener('keydown', onceOpen, { once:true });
 
     loadCategories();
     renderCatBar();
