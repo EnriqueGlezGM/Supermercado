@@ -83,6 +83,14 @@ Si hay productos sin categoría, antes de exportar la app muestra un aviso con o
 
 ## Deploy en GitHub Pages
 
+El deploy se ejecuta automáticamente con GitHub Actions cada vez que hay un nuevo commit en `main`. El workflow genera el build y publica la carpeta `dist` en la rama `gh-pages`.
+
+En GitHub, ve a **Settings → Pages** y selecciona:
+- Source: `gh-pages`
+- Folder: `/ (root)`
+
+### Deploy manual
+
 1. Genera el build:
    ```bash
    npm run build
@@ -91,6 +99,3 @@ Si hay productos sin categoría, antes de exportar la app muestra un aviso con o
    ```bash
    npx gh-pages -d dist
    ```
-3. En GitHub, ve a **Settings → Pages** y selecciona:
-   - Source: `gh-pages`
-   - Folder: `/ (root)`
