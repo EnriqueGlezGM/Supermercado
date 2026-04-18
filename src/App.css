@@ -187,6 +187,83 @@ a.desc-link .desc-text { text-decoration:underline; text-underline-offset:2px; }
   border:1px solid rgba(25, 135, 84, 0.16);
   color:#146c43;
 }
+.amount-calc {
+  width: 100%;
+  padding: .75rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.72);
+}
+.total-editor,
+.total-edit-panel {
+  font-weight: 400;
+}
+.check-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.check-summary {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .35rem;
+  min-width: 0;
+}
+.total-edit-toggle {
+  flex: 0 0 auto;
+  line-height: 1;
+}
+.total-calc {
+  max-width: 360px;
+}
+.amount-calc-hint {
+  min-height: 1.25rem;
+  margin-bottom: .55rem;
+  color: #64748b;
+  font-size: .86rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.amount-calc-hint:empty {
+  display: none;
+}
+.amount-calc-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .45rem;
+}
+.amount-calc-grid button {
+  min-height: 46px;
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #0f172a;
+  font-size: 1.2rem;
+  font-weight: 650;
+  line-height: 1;
+  touch-action: manipulation;
+}
+.amount-calc-grid button:active {
+  transform: scale(.98);
+}
+.amount-calc-grid button.op {
+  background: rgba(219, 234, 254, 0.92);
+  border-color: rgba(37, 99, 235, 0.22);
+  color: #1d4ed8;
+}
+.amount-calc-grid button.danger {
+  background: rgba(254, 226, 226, 0.9);
+  border-color: rgba(220, 38, 38, 0.24);
+  color: #b91c1c;
+}
+.amount-calc-grid button.equals {
+  grid-column: span 3;
+  background: rgba(34, 197, 94, 0.16);
+  border-color: rgba(22, 163, 74, 0.28);
+  color: #15803d;
+}
 
 /* Tabla responsive */
 .table-wrap { width:100%; overflow-x:auto; }
@@ -226,6 +303,33 @@ th.th-desc,td.td-desc{max-width:40ch;overflow-wrap:anywhere;word-break:break-wor
   background:rgba(34, 197, 94, 0.1);
   border-color:rgba(74, 222, 128, 0.2);
 }
+:root[data-bs-theme="dark"] .amount-calc {
+  background: rgba(15, 23, 42, 0.72);
+  border-color: rgba(148, 163, 184, 0.28);
+}
+:root[data-bs-theme="dark"] .amount-calc-hint {
+  color: #94a3b8;
+}
+:root[data-bs-theme="dark"] .amount-calc-grid button {
+  background: rgba(30, 41, 59, 0.95);
+  border-color: rgba(148, 163, 184, 0.3);
+  color: #e2e8f0;
+}
+:root[data-bs-theme="dark"] .amount-calc-grid button.op {
+  background: rgba(37, 99, 235, 0.24);
+  border-color: rgba(96, 165, 250, 0.3);
+  color: #bfdbfe;
+}
+:root[data-bs-theme="dark"] .amount-calc-grid button.danger {
+  background: rgba(127, 29, 29, 0.35);
+  border-color: rgba(248, 113, 113, 0.25);
+  color: #fecaca;
+}
+:root[data-bs-theme="dark"] .amount-calc-grid button.equals {
+  background: rgba(22, 101, 52, 0.35);
+  border-color: rgba(74, 222, 128, 0.25);
+  color: #bbf7d0;
+}
 
 /* Formulario corrección manual */
 #manualFix .form-text{margin-top:.25rem;}
@@ -249,6 +353,32 @@ th.th-desc,td.td-desc{max-width:40ch;overflow-wrap:anywhere;word-break:break-wor
 .split-label .name { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:200px; }
 .split-input-group { width:110px; }
 .split-input { text-align:right; }
+.export-missing-cats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: .55rem;
+}
+.export-missing-cat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .45rem;
+  min-height: 46px;
+  padding: .55rem .75rem;
+  border: 1px solid color-mix(in srgb, var(--cat-color) 38%, rgba(148, 163, 184, 0.45));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--cat-color) 12%, rgba(255, 255, 255, 0.9));
+  color: #0f172a;
+  font-weight: 650;
+  touch-action: manipulation;
+}
+.export-missing-cat:active {
+  transform: scale(.98);
+}
+:root[data-bs-theme="dark"] .export-missing-cat {
+  background: color-mix(in srgb, var(--cat-color) 18%, rgba(15, 23, 42, 0.9));
+  color: #e2e8f0;
+}
 @media (max-width:576px){
   .split-input-group { width:90px; }
   .split-label .name { max-width:140px; }

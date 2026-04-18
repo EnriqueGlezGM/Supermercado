@@ -181,7 +181,6 @@ export default function App() {
                   </div>
                 </div>
               </form>
-              <div id="catEditHint" className="form-text">Pulsa “Guardar” para aplicar los cambios.</div>
             </div>
             <div className="modal-footer justify-content-between">
               <button type="button" id="catEditDelete" className="btn btn-outline-danger d-none">Eliminar</button>
@@ -220,6 +219,29 @@ export default function App() {
         </div>
       </div>
 
+      <div className="modal fade" id="exportMissingModal" tabIndex={-1} aria-labelledby="exportMissingLabel" aria-hidden="true">
+        <div className="modal-dialog modal-dialog-scrollable">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h5 className="modal-title" id="exportMissingLabel">Productos sin categoría</h5>
+              <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+            </div>
+            <div className="modal-body">
+              <div id="exportMissingSummary" className="small text-muted"></div>
+              <div id="exportMissingCats" className="export-missing-cats mt-3"></div>
+            </div>
+            <div className="modal-footer justify-content-between">
+              <button type="button" id="exportAssignedOnly" className="btn btn-outline-secondary">
+                Exportar asignados
+              </button>
+              <button type="button" className="btn btn-outline-secondary" data-bs-dismiss="modal">
+                Cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="modal fade" id="rowEditModal" tabIndex={-1} aria-labelledby="rowEditLabel" aria-hidden="true">
         <div className="modal-dialog">
           <div className="modal-content">
@@ -241,8 +263,9 @@ export default function App() {
                       type="text"
                       id="rowEditAmount"
                       className="form-control mono"
-                      inputMode="decimal"
+                      inputMode="none"
                       autoComplete="off"
+                      readOnly
                     />
                   </div>
                 </div>
@@ -251,12 +274,36 @@ export default function App() {
                     Repartir %
                   </button>
                 </div>
+                <div className="col-12">
+                  <div id="rowAmountCalc" className="amount-calc" aria-label="Calculadora de importe">
+                    <div id="rowAmountCalcHint" className="amount-calc-hint" aria-live="polite"></div>
+                    <div className="amount-calc-grid">
+                      <button type="button" data-calc-key="7">7</button>
+                      <button type="button" data-calc-key="8">8</button>
+                      <button type="button" data-calc-key="9">9</button>
+                      <button type="button" data-calc-key="/" className="op">÷</button>
+                      <button type="button" data-calc-key="4">4</button>
+                      <button type="button" data-calc-key="5">5</button>
+                      <button type="button" data-calc-key="6">6</button>
+                      <button type="button" data-calc-key="*" className="op">×</button>
+                      <button type="button" data-calc-key="1">1</button>
+                      <button type="button" data-calc-key="2">2</button>
+                      <button type="button" data-calc-key="3">3</button>
+                      <button type="button" data-calc-key="-" className="op">−</button>
+                      <button type="button" data-calc-key="0">0</button>
+                      <button type="button" data-calc-key=",">,</button>
+                      <button type="button" data-calc-action="back">⌫</button>
+                      <button type="button" data-calc-key="+" className="op">+</button>
+                      <button type="button" data-calc-action="clear" className="danger">C</button>
+                      <button type="button" data-calc-action="equals" className="equals">=</button>
+                    </div>
+                  </div>
+                </div>
                 <div className="col-12 d-none" id="rowEditDiscountWrap">
                   <label htmlFor="rowEditDiscount" className="form-label small mb-1">Descuento aplicado</label>
                   <div id="rowEditDiscount" className="ticket-discount-readout"></div>
                 </div>
               </form>
-              <div className="form-text mt-2">Puedes cambiar el nombre, el importe u ocultar la línea.</div>
             </div>
             <div className="modal-footer justify-content-between">
               <button type="button" id="rowEditDelete" className="btn btn-outline-danger">Ocultar</button>

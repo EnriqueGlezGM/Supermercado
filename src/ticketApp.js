@@ -103,8 +103,11 @@ export function initTicketApp() {
   let catEditModal = null;
   let splitEditKey = null;
   let splitModal = null;
+  let exportMissingModal = null;
+  let splitReturnToRowEdit = false;
   let rowEditKey = null;
   let rowEditModal = null;
+  let keepRowEditStateOnHide = false;
 
   function getCategoryById(id){ return categories.find(c => c.id === id); }
   function slugifyName(name){
@@ -327,7 +330,6 @@ export function initTicketApp() {
     const $noSplit = document.getElementById('catEditNoSplit');
     const $mask = document.getElementById('catEditMask');
     const $title = document.getElementById('catEditLabel');
-    const $hint = document.getElementById('catEditHint');
     const $save = document.getElementById('catEditSave');
 
     if ($name) $name.value = isCreate ? '' : (cat.name || '');
@@ -338,9 +340,6 @@ export function initTicketApp() {
     if ($mask) $mask.checked = isCreate ? false : !!cat.masked;
 
     if ($title) $title.textContent = isCreate ? 'Nueva categoría' : 'Editar categoría';
-    if ($hint) $hint.textContent = isCreate
-      ? 'Pulsa “Crear” para añadir la nueva categoría.'
-      : 'Pulsa “Guardar” para aplicar los cambios.';
     if ($save) $save.textContent = isCreate ? 'Crear' : 'Guardar';
 
     updateCatEditDeleteBtn();
@@ -485,6 +484,19 @@ export function initTicketApp() {
     if (clearBtn){ clearSplitEditor(); return; }
   });
   document.addEventListener('click', (ev)=>{
+    const catBtn = ev.target.closest('.export-missing-cat');
+    if (catBtn){
+      const id = catBtn.getAttribute('data-cat-id');
+      if (id) assignMissingCategoryAndExport(id);
+      return;
+    }
+    const assignedOnly = ev.target.closest('#exportAssignedOnly');
+    if (assignedOnly){
+      if (exportMissingModal) exportMissingModal.hide();
+      exportCategoryImages();
+    }
+  });
+  document.addEventListener('click', (ev)=>{
     const saveBtn = ev.target.closest('#rowEditSave');
     if (saveBtn){ saveRowEditor(); return; }
     const delBtn = ev.target.closest('#rowEditDelete');
@@ -492,8 +504,11 @@ export function initTicketApp() {
     const splitBtn = ev.target.closest('#rowEditSplit');
     if (splitBtn){
       if (rowEditKey) {
+        const key = rowEditKey;
+        keepRowEditStateOnHide = true;
+        splitReturnToRowEdit = true;
         if (rowEditModal) rowEditModal.hide();
-        openSplitEditor(rowEditKey);
+        openSplitEditor(key);
       }
       return;
     }
@@ -515,6 +530,186 @@ export function initTicketApp() {
     str = str.trim().replace(/[€\s]/g,'').replace(/\./g,'').replace(',', '.');
     const n = Number(str);
     return isFinite(n) ? n : NaN;
+  }
+  function normalizeCalcExpression(str){
+    return String(str ?? '')
+      .replace(/[€\s]/g, '')
+      .replace(/[×x]/gi, '*')
+      .replace(/[÷:]/g, '/')
+      .replace(/[−–—]/g, '-')
+      .replace(/\.(?=\d{3}(?:[^\d]|$))/g, '');
+  }
+  function tokenizeCalcExpression(expr){
+    const src = normalizeCalcExpression(expr);
+    const tokens = [];
+    let i = 0;
+    while (i < src.length){
+      const ch = src[i];
+      const prev = tokens[tokens.length - 1];
+      const unaryMinus = ch === '-'
+        && (!tokens.length || typeof prev === 'string')
+        && /[\d,.]/.test(src[i + 1] || '');
+      if (/[\d,.]/.test(ch) || unaryMinus){
+        let raw = unaryMinus ? '-' : '';
+        if (unaryMinus) i++;
+        let decimalSeen = false;
+        while (i < src.length && /[\d,.]/.test(src[i])){
+          const c = src[i];
+          if (c === ',' || c === '.'){
+            if (decimalSeen) return null;
+            decimalSeen = true;
+            raw += '.';
+          } else {
+            raw += c;
+          }
+          i++;
+        }
+        const n = Number(raw);
+        if (!isFinite(n)) return null;
+        tokens.push(n);
+        continue;
+      }
+      if ('+-*/'.includes(ch)){
+        tokens.push(ch);
+        i++;
+        continue;
+      }
+      return null;
+    }
+    return tokens;
+  }
+  function evaluateAmountExpression(str){
+    const tokens = tokenizeCalcExpression(str);
+    if (!tokens || !tokens.length) return NaN;
+    const output = [];
+    const ops = [];
+    const precedence = { '+': 1, '-': 1, '*': 2, '/': 2 };
+    let expectNumber = true;
+    for (const token of tokens){
+      if (typeof token === 'number'){
+        if (!expectNumber) return NaN;
+        output.push(token);
+        expectNumber = false;
+        continue;
+      }
+      if (expectNumber) return NaN;
+      while (ops.length && precedence[ops[ops.length - 1]] >= precedence[token]){
+        output.push(ops.pop());
+      }
+      ops.push(token);
+      expectNumber = true;
+    }
+    if (expectNumber) return NaN;
+    while (ops.length) output.push(ops.pop());
+
+    const stack = [];
+    for (const token of output){
+      if (typeof token === 'number'){
+        stack.push(token);
+        continue;
+      }
+      const b = stack.pop();
+      const a = stack.pop();
+      if (!isFinite(a) || !isFinite(b)) return NaN;
+      if (token === '+') stack.push(a + b);
+      else if (token === '-') stack.push(a - b);
+      else if (token === '*') stack.push(a * b);
+      else if (token === '/'){
+        if (Math.abs(b) < 0.0000001) return NaN;
+        stack.push(a / b);
+      }
+    }
+    return stack.length === 1 && isFinite(stack[0]) ? stack[0] : NaN;
+  }
+  function formatCalcExpression(str){
+    return String(str ?? '').replace(/\*/g, '×').replace(/\//g, '÷').replace(/-/g, '−');
+  }
+  function getRowAmountValue(){
+    const input = document.getElementById('rowEditAmount');
+    if (!input) return NaN;
+    const calc = evaluateAmountExpression(input.value);
+    if (isFinite(calc)) return calc;
+    return sanitizeAmountInput(input.value);
+  }
+  function updateTotalCalcHint(){
+    const input = document.getElementById('manualTotalInput');
+    const hint = document.getElementById('totalCalcHint');
+    if (!input || !hint) return;
+    const expr = normalizeCalcExpression(input.value);
+    const hasOperator = /[+\-*/]/.test(expr.replace(/^-/, ''));
+    const result = evaluateAmountExpression(input.value);
+    if (hasOperator && isFinite(result)){
+      hint.textContent = `= ${toEUR(result)} €`;
+      hint.classList.remove('text-danger');
+    } else if (hasOperator){
+      hint.textContent = 'Operacion no valida';
+      hint.classList.add('text-danger');
+    } else {
+      hint.textContent = '';
+      hint.classList.remove('text-danger');
+    }
+  }
+  function setTotalCalcExpression(value, pristine = false){
+    const input = document.getElementById('manualTotalInput');
+    if (!input) return;
+    input.value = value;
+    input.dataset.calcPristine = pristine ? '1' : '0';
+    input.classList.remove('is-invalid');
+    updateTotalCalcHint();
+  }
+  function appendTotalCalcKey(key){
+    const input = document.getElementById('manualTotalInput');
+    if (!input) return;
+    const isPristine = input.dataset.calcPristine === '1';
+    const isOperator = ['+', '-', '*', '/'].includes(key);
+    let value = input.value || '';
+    if (isPristine && !isOperator){
+      value = key === ',' ? '0,' : key;
+    } else if (key === ','){
+      const parts = normalizeCalcExpression(value).split(/[+\-*/]/);
+      const currentNumber = parts[parts.length - 1] || '';
+      if (currentNumber.includes('.') || currentNumber.includes(',')) return;
+      if (!currentNumber) value += '0';
+      value += ',';
+    } else if (isOperator){
+      const normalized = normalizeCalcExpression(value);
+      if (!normalized) return;
+      if (/[+\-*/]$/.test(normalized)){
+        value = value.slice(0, -1) + formatCalcExpression(key);
+      } else {
+        value += formatCalcExpression(key);
+      }
+    } else {
+      value += key;
+    }
+    setTotalCalcExpression(value, false);
+  }
+  function handleTotalCalcAction(action){
+    const input = document.getElementById('manualTotalInput');
+    if (!input) return;
+    if (action === 'clear'){
+      setTotalCalcExpression('', false);
+      return;
+    }
+    if (action === 'back'){
+      setTotalCalcExpression((input.value || '').slice(0, -1), false);
+      return;
+    }
+    if (action === 'equals'){
+      const result = evaluateAmountExpression(input.value);
+      if (!isFinite(result)) {
+        updateTotalCalcHint();
+        return;
+      }
+      setTotalCalcExpression(toEUR(result), true);
+    }
+  }
+  function getTotalCalcValue(){
+    const input = document.getElementById('manualTotalInput');
+    if (!input) return NaN;
+    const calc = evaluateAmountExpression(input.value);
+    if (isFinite(calc)) return calc;
+    return sanitizeAmountInput(input.value);
   }
 
   /* ------------ PROGRESO / VALIDACIÓN ------------ */
@@ -558,80 +753,94 @@ export function initTicketApp() {
       </div>
     </div>`;
   }
-  function setCheckNone(){ $check.innerHTML = '<span class="text-muted">— Validación pendiente —</span>'; }
-  function expectedSourceLabel(filenameExpected, expected){
-    if (isFinite(filenameExpected)) return `archivo: ${toEUR(filenameExpected)}`;
-    if (isFinite(manualExpectedTotal)) return `manual: ${toEUR(expected)}`;
-    if (isFinite(ticketExpectedTotal)) return `ticket: ${toEUR(expected)}`;
-    return `manual: ${toEUR(expected)}`;
+  function renderTotalCalcButtons(){
+    return `<div class="amount-calc total-calc mt-2" aria-label="Calculadora de total">
+      <div id="totalCalcHint" class="amount-calc-hint" aria-live="polite"></div>
+      <div class="amount-calc-grid">
+        <button type="button" data-total-calc-key="7">7</button>
+        <button type="button" data-total-calc-key="8">8</button>
+        <button type="button" data-total-calc-key="9">9</button>
+        <button type="button" data-total-calc-key="/" class="op">÷</button>
+        <button type="button" data-total-calc-key="4">4</button>
+        <button type="button" data-total-calc-key="5">5</button>
+        <button type="button" data-total-calc-key="6">6</button>
+        <button type="button" data-total-calc-key="*" class="op">×</button>
+        <button type="button" data-total-calc-key="1">1</button>
+        <button type="button" data-total-calc-key="2">2</button>
+        <button type="button" data-total-calc-key="3">3</button>
+        <button type="button" data-total-calc-key="-" class="op">−</button>
+        <button type="button" data-total-calc-key="0">0</button>
+        <button type="button" data-total-calc-key=",">,</button>
+        <button type="button" data-total-calc-action="back">⌫</button>
+        <button type="button" data-total-calc-key="+" class="op">+</button>
+        <button type="button" data-total-calc-action="clear" class="danger">C</button>
+        <button type="button" data-total-calc-action="equals" class="equals">=</button>
+      </div>
+    </div>`;
   }
+  function renderTotalEditor(expected, expanded = false){
+    const value = isFinite(expected) && expected > 0 ? toEUR(expected) : '';
+    return `<div class="total-editor mt-2">
+      <form id="manualTotalForm" class="total-edit-panel ${expanded ? '' : 'd-none'} mt-2">
+        <label for="manualTotalInput" class="form-label small mb-1">Total esperado</label>
+        <div class="input-group">
+          <span class="input-group-text">€</span>
+          <input
+            id="manualTotalInput"
+            type="text"
+            class="form-control mono"
+            inputmode="none"
+            autocomplete="off"
+            readonly
+            data-calc-pristine="1"
+            value="${escapeHtml(value)}"
+          />
+        </div>
+        ${renderTotalCalcButtons()}
+        <button type="submit" class="btn btn-primary w-100 mt-2">Aplicar total</button>
+        ${renderManualTotalSuggestions()}
+      </form>
+    </div>`;
+  }
+  function renderCheckSummary(statusIcon, expected, totalCalc, hiddenTotal){
+    const parts = [
+      `<strong>${statusIcon}</strong>`,
+      `<span>${toEUR(expected)} €</span>`,
+      `<span>·</span>`,
+      `<span>${toEUR(totalCalc)} €</span>`
+    ];
+    if (hiddenTotal) parts.push(`<span>·</span><span>ocultos ${toEUR(hiddenTotal)} €</span>`);
+    return `<div class="check-row">
+      <div class="check-summary">${parts.join('')}</div>
+      <button type="button" class="btn btn-sm btn-outline-secondary total-edit-toggle" aria-label="Editar total">✏️</button>
+    </div>`;
+  }
+  function setCheckNone(){ $check.innerHTML = '<span class="text-muted">— Validación pendiente —</span>'; }
   function setCheck(filename, totalCalc){
     const filenameExpected = parseFilenameTotal(filename);
-    const expected = isFinite(filenameExpected)
-      ? filenameExpected
-      : (isFinite(manualExpectedTotal) ? manualExpectedTotal : ticketExpectedTotal);
+    const expected = isFinite(manualExpectedTotal)
+      ? manualExpectedTotal
+      : (isFinite(filenameExpected) ? filenameExpected : ticketExpectedTotal);
     const hiddenTotal = getHiddenTotal(baseItems.concat(manualItems));
     const adjustedExpected = isFinite(expected) ? Number((expected - hiddenTotal).toFixed(2)) : NaN;
     let html = '';
     if (!isFinite(expected)) {
       html = `<div class="alert alert-secondary py-2 my-2" role="alert">
         <div class="fw-semibold mb-2">No se encontró importe en el nombre del archivo.</div>
-        <form id="manualTotalForm" class="row g-2 align-items-end">
-          <div class="col-12 col-sm-7">
-            <label for="manualTotalInput" class="form-label small mb-1">Total del ticket</label>
-            <div class="input-group">
-              <span class="input-group-text">€</span>
-              <input
-                id="manualTotalInput"
-                type="text"
-                class="form-control mono"
-                inputmode="decimal"
-                autocomplete="off"
-                placeholder="Ej. 44,66"
-                value=""
-              />
-            </div>
-          </div>
-          <div class="col-12 col-sm-5">
-            <button type="submit" class="btn btn-primary w-100">Usar este total</button>
-          </div>
-        </form>
-        ${renderManualTotalSuggestions()}
+        ${renderTotalEditor(expected, true)}
       </div>`;
       lastCheckOk = null; lastExpected = NaN; lastCalc = Number(totalCalc)||NaN; lastFilename = filename || '';
     } else if (nearlyEqual(adjustedExpected, totalCalc)) {
-      const sourceLabel = expectedSourceLabel(filenameExpected, expected);
       html = `<div class="alert alert-success fw-bold my-2" role="alert" style="font-size:1.05rem">
-        ✅ Coincide — <span class="fw-normal">${sourceLabel}${hiddenTotal ? ` • ocultos: ${toEUR(hiddenTotal)}` : ''} • esperado: ${toEUR(adjustedExpected)} • calculado: ${toEUR(totalCalc)}</span>
+        ${renderCheckSummary('✅ Coincide', adjustedExpected, totalCalc, hiddenTotal)}
+        ${renderTotalEditor(expected, false)}
       </div>`;
       lastCheckOk = true; lastExpected = Number(adjustedExpected); lastCalc = Number(totalCalc); lastFilename = filename || '';
     } else {
-      const sourceLabel = expectedSourceLabel(filenameExpected, expected);
       html = `<div class="alert alert-danger fw-bold my-2" role="alert" style="font-size:1.05rem">
-        ❌ No coincide — <span class="fw-normal">${sourceLabel}${hiddenTotal ? ` • ocultos: ${toEUR(hiddenTotal)}` : ''} • esperado: ${toEUR(adjustedExpected)} • calculado: ${toEUR(totalCalc)}</span>
+        ${renderCheckSummary('❌ No coincide', adjustedExpected, totalCalc, hiddenTotal)}
+        ${renderTotalEditor(expected, false)}
       </div>`;
-      if (!isFinite(filenameExpected)) {
-        html += `<form id="manualTotalForm" class="row g-2 align-items-end mt-1">
-          <div class="col-12 col-sm-7">
-            <label for="manualTotalInput" class="form-label small mb-1">Corregir total del ticket</label>
-            <div class="input-group">
-              <span class="input-group-text">€</span>
-              <input
-                id="manualTotalInput"
-                type="text"
-                class="form-control mono"
-                inputmode="decimal"
-                autocomplete="off"
-                value="${escapeHtml(toEUR(expected))}"
-              />
-            </div>
-          </div>
-          <div class="col-12 col-sm-5">
-            <button type="submit" class="btn btn-outline-primary w-100">Actualizar total</button>
-          </div>
-        </form>`;
-        html += renderManualTotalSuggestions();
-      }
       lastCheckOk = false; lastExpected = Number(adjustedExpected); lastCalc = Number(totalCalc); lastFilename = filename || '';
     }
     $check.innerHTML = html;
@@ -1082,22 +1291,72 @@ export function initTicketApp() {
   }
 
   /* ------------ ESTADO EXPORT & ENLACE DESC ------------ */
+  function getUnassignedItems(){
+    return currentItems.filter((it) => {
+      const key = itemKey(it);
+      return key && !isAllocationComplete(key);
+    });
+  }
   function updateExportButtonState() {
     if (!currentItems.length) {
       $btnExport.disabled = true;
       $btnExport.title = 'No hay productos para exportar';
       return;
     }
-    let assigned = 0;
-    for (const it of currentItems) {
-      const key = itemKey(it);
-      if (key && isAllocationComplete(key)) assigned++;
+    const unassigned = getUnassignedItems();
+    $btnExport.disabled = false;
+    $btnExport.title = unassigned.length
+      ? `Hay ${unassigned.length} productos sin categoría`
+      : 'Exportar una única imagen con todas las categorías';
+  }
+  function initExportMissingModal(){
+    if (exportMissingModal) return;
+    const $modal = document.getElementById('exportMissingModal');
+    if (!$modal) return;
+    exportMissingModal = new Modal($modal, { backdrop: true, focus: true, keyboard: true });
+  }
+  function openExportMissingModal(){
+    const unassigned = getUnassignedItems();
+    if (!unassigned.length) return false;
+    initExportMissingModal();
+    if (!exportMissingModal) return false;
+
+    const total = unassigned.reduce((acc, it) => acc + (Number(it.amount) || 0), 0);
+    const summary = document.getElementById('exportMissingSummary');
+    if (summary) {
+      summary.innerHTML = `<strong>${unassigned.length}</strong> productos no tienen categoría (${toEUR(total)} €). Elige una categoría para asignarlos todos y exportar.`;
     }
-    const allAssigned = assigned === currentItems.length;
-    $btnExport.disabled = !allAssigned;
-    $btnExport.title = allAssigned
-      ? 'Exportar una única imagen con todas las categorías'
-      : 'Asigna categoría a todas las filas para exportar';
+
+    const cats = document.getElementById('exportMissingCats');
+    if (cats) {
+      cats.innerHTML = categories.map((c) => `
+        <button type="button" class="export-missing-cat" data-cat-id="${escapeHtml(c.id)}" style="--cat-color:${escapeHtml(c.color)}">
+          <span class="cat-swatch" style="background:${escapeHtml(c.color)}"></span>
+          <span>${escapeHtml(c.name)}</span>
+        </button>
+      `).join('');
+    }
+
+    exportMissingModal.show();
+    return true;
+  }
+  function assignMissingCategoryAndExport(categoryId){
+    const cat = getCategoryById(categoryId);
+    if (!cat) return;
+    const unassigned = getUnassignedItems();
+    for (const it of unassigned){
+      const key = itemKey(it);
+      if (key) setAllocations(key, [{ id: categoryId, pct: 100 }]);
+    }
+    const total = setTable(baseItems);
+    lastCalc = total;
+    setCheck(lastFilename || '', total);
+    if (exportMissingModal) exportMissingModal.hide();
+    exportCategoryImages();
+  }
+  function requestExportCategoryImages(){
+    if (openExportMissingModal()) return;
+    exportCategoryImages();
   }
 
   // Evitar que el clic en el enlace de la descripción asigne categoría
@@ -1398,7 +1657,14 @@ export function initTicketApp() {
     const $modal = document.getElementById('splitModal');
     if (!$modal) return;
     splitModal = new Modal($modal, { backdrop: true, focus: true, keyboard: true });
-    $modal.addEventListener('hidden.bs.modal', () => { splitEditKey = null; });
+    $modal.addEventListener('hidden.bs.modal', () => {
+      const shouldReturn = splitReturnToRowEdit;
+      splitEditKey = null;
+      splitReturnToRowEdit = false;
+      if (shouldReturn && rowEditKey && rowEditModal) {
+        rowEditModal.show();
+      }
+    });
   }
   function updateSplitTotal(){
     const inputs = Array.from(document.querySelectorAll('#splitList .split-input'));
@@ -1512,7 +1778,85 @@ export function initTicketApp() {
     const $modal = document.getElementById('rowEditModal');
     if (!$modal) return;
     rowEditModal = new Modal($modal, { backdrop: true, focus: true, keyboard: true });
-    $modal.addEventListener('hidden.bs.modal', () => { rowEditKey = null; });
+    $modal.addEventListener('hidden.bs.modal', () => {
+      if (keepRowEditStateOnHide) {
+        keepRowEditStateOnHide = false;
+        return;
+      }
+      rowEditKey = null;
+    });
+  }
+  function updateRowAmountCalcHint(){
+    const input = document.getElementById('rowEditAmount');
+    const hint = document.getElementById('rowAmountCalcHint');
+    if (!input || !hint) return;
+    const expr = normalizeCalcExpression(input.value);
+    const hasOperator = /[+\-*/]/.test(expr.replace(/^-/, ''));
+    const result = evaluateAmountExpression(input.value);
+    if (hasOperator && isFinite(result)){
+      hint.textContent = `= ${toEUR(result)} €`;
+      hint.classList.remove('text-danger');
+    } else if (hasOperator){
+      hint.textContent = 'Operacion no valida';
+      hint.classList.add('text-danger');
+    } else {
+      hint.textContent = '';
+      hint.classList.remove('text-danger');
+    }
+  }
+  function setRowAmountExpression(value, pristine = false){
+    const input = document.getElementById('rowEditAmount');
+    if (!input) return;
+    input.value = value;
+    input.dataset.calcPristine = pristine ? '1' : '0';
+    updateRowAmountCalcHint();
+  }
+  function appendRowAmountCalcKey(key){
+    const input = document.getElementById('rowEditAmount');
+    if (!input) return;
+    const isPristine = input.dataset.calcPristine === '1';
+    const isOperator = ['+', '-', '*', '/'].includes(key);
+    let value = input.value || '';
+    if (isPristine && !isOperator){
+      value = key === ',' ? '0,' : key;
+    } else if (key === ','){
+      const parts = normalizeCalcExpression(value).split(/[+\-*/]/);
+      const currentNumber = parts[parts.length - 1] || '';
+      if (currentNumber.includes('.') || currentNumber.includes(',')) return;
+      if (!currentNumber) value += '0';
+      value += ',';
+    } else if (isOperator){
+      const normalized = normalizeCalcExpression(value);
+      if (!normalized) return;
+      if (/[+\-*/]$/.test(normalized)){
+        value = value.slice(0, -1) + formatCalcExpression(key);
+      } else {
+        value += formatCalcExpression(key);
+      }
+    } else {
+      value += key;
+    }
+    setRowAmountExpression(value, false);
+  }
+  function handleRowAmountCalcAction(action){
+    const input = document.getElementById('rowEditAmount');
+    if (!input) return;
+    if (action === 'clear'){
+      setRowAmountExpression('', false);
+      return;
+    }
+    if (action === 'back'){
+      setRowAmountExpression((input.value || '').slice(0, -1), false);
+      return;
+    }
+    if (action === 'equals'){
+      const result = evaluateAmountExpression(input.value);
+      if (!isFinite(result)) {
+        updateRowAmountCalcHint();
+        return;
+      }
+      setRowAmountExpression(toEUR(result), true);
+    }
   }
   function openRowEditor(key){
     const it = itemsByKey.get(key);
@@ -1524,7 +1868,7 @@ export function initTicketApp() {
     const nameInput = document.getElementById('rowEditName');
     const amtInput = document.getElementById('rowEditAmount');
     if (nameInput) nameInput.value = it.description || '';
-    if (amtInput) amtInput.value = toEUR(Number(it.amount) || 0);
+    if (amtInput) setRowAmountExpression(toEUR(Number(it.amount) || 0), true);
     const discountWrap = document.getElementById('rowEditDiscountWrap');
     const discountInfo = document.getElementById('rowEditDiscount');
     if (discountWrap && discountInfo) {
@@ -1566,9 +1910,8 @@ export function initTicketApp() {
     if (!it) return;
 
     const nameInput = document.getElementById('rowEditName');
-    const amtInput = document.getElementById('rowEditAmount');
     const nextName = nameInput ? nameInput.value.trim() : '';
-    const nextAmt = amtInput ? sanitizeAmountInput(amtInput.value) : NaN;
+    const nextAmt = getRowAmountValue();
     if (!nextName) { alert('Introduce una descripción.'); return; }
     if (!isFinite(nextAmt)) { alert('Importe inválido.'); return; }
 
@@ -1619,7 +1962,7 @@ export function initTicketApp() {
     if (!form) return;
     ev.preventDefault();
     const input = form.querySelector('#manualTotalInput');
-    const nextTotal = input ? sanitizeAmountInput(input.value) : NaN;
+    const nextTotal = input ? getTotalCalcValue() : NaN;
     if (!isFinite(nextTotal) || nextTotal <= 0) {
       if (input) input.classList.add('is-invalid');
       return;
@@ -1632,8 +1975,25 @@ export function initTicketApp() {
     const input = ev.target.closest('#manualTotalInput');
     if (!input) return;
     input.classList.remove('is-invalid');
+    updateTotalCalcHint();
   });
   $check.addEventListener('click', (ev) => {
+    const toggle = ev.target.closest('.total-edit-toggle');
+    if (toggle){
+      const panel = toggle.closest('.alert')?.querySelector('.total-edit-panel');
+      if (panel) panel.classList.remove('d-none');
+      if (panel) toggle.classList.add('d-none');
+      updateTotalCalcHint();
+      return;
+    }
+    const calcBtn = ev.target.closest('[data-total-calc-key], [data-total-calc-action]');
+    if (calcBtn){
+      const key = calcBtn.getAttribute('data-total-calc-key');
+      const action = calcBtn.getAttribute('data-total-calc-action');
+      if (key) appendTotalCalcKey(key);
+      if (action) handleTotalCalcAction(action);
+      return;
+    }
     const btn = ev.target.closest('.manual-total-suggestion');
     if (!btn) return;
     const nextTotal = Number(btn.getAttribute('data-total'));
@@ -1645,8 +2005,8 @@ export function initTicketApp() {
   $check.addEventListener('blur', (ev) => {
     const input = ev.target.closest('#manualTotalInput');
     if (!input) return;
-    const n = sanitizeAmountInput(input.value);
-    if (isFinite(n) && n > 0) input.value = toEUR(n);
+    const n = getTotalCalcValue();
+    if (isFinite(n) && n > 0) setTotalCalcExpression(toEUR(n), true);
   }, true);
   if ($btnToggleHidden){
     $btnToggleHidden.addEventListener('click', () => {
@@ -1673,8 +2033,19 @@ export function initTicketApp() {
   const $rowEditAmount = document.getElementById('rowEditAmount');
   if ($rowEditAmount){
     $rowEditAmount.addEventListener('blur', () => {
-      const n = sanitizeAmountInput($rowEditAmount.value);
-      if (isFinite(n)) $rowEditAmount.value = toEUR(n);
+      const n = getRowAmountValue();
+      if (isFinite(n)) setRowAmountExpression(toEUR(n), true);
+    });
+  }
+  const $rowAmountCalc = document.getElementById('rowAmountCalc');
+  if ($rowAmountCalc){
+    $rowAmountCalc.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('button');
+      if (!btn) return;
+      const key = btn.getAttribute('data-calc-key');
+      const action = btn.getAttribute('data-calc-action');
+      if (key) appendRowAmountCalcKey(key);
+      if (action) handleRowAmountCalcAction(action);
     });
   }
 
@@ -1720,7 +2091,7 @@ export function initTicketApp() {
   });
 
   // Export
-  $btnExport.addEventListener('click', exportCategoryImages);
+  $btnExport.addEventListener('click', requestExportCategoryImages);
 
     loadCategories();
     renderCatBar();
