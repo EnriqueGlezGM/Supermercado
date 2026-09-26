@@ -147,6 +147,9 @@ export function initTicketApp() {
   let exportPreviewUrl = '';
   let exportPreviewBlob = null;
   let splitReturnToRowEdit = false;
+  let splitInputMode = 'percentage';
+  let splitDraftPercentages = new Map();
+  let splitDraftParts = new Map();
   let rowEditKey = null;
   let rowEditModal = null;
   let keepRowEditStateOnHide = false;
@@ -258,12 +261,23 @@ export function initTicketApp() {
       let pct = Number(entry.pct);
       if (!isFinite(pct) || pct <= 0) continue;
       if (pct > 100) pct = 100;
-      byId.set(id, (byId.get(id) || 0) + pct);
+      const parts = Number(entry.parts);
+      const previous = byId.get(id) || { pct: 0, parts: 0, hasParts: false };
+      previous.pct += pct;
+      if (isFinite(parts) && parts > 0) {
+        previous.parts += parts;
+        previous.hasParts = true;
+      }
+      byId.set(id, previous);
     }
     const out = [];
     for (const c of categories){
-      const pct = byId.get(c.id);
-      if (pct && pct > 0.001) out.push({ id: c.id, pct: Number(pct.toFixed(2)) });
+      const value = byId.get(c.id);
+      if (value && value.pct > 0.001) {
+        const allocation = { id: c.id, pct: Number(value.pct.toFixed(2)) };
+        if (value.hasParts) allocation.parts = Number(value.parts.toFixed(2));
+        out.push(allocation);
+      }
     }
     return out;
   }
@@ -294,7 +308,7 @@ export function initTicketApp() {
     for (const [key, list] of Array.from(allocationMap.entries())){
       let changed = false;
       const next = list.map(a => {
-        if (a.id === oldId){ changed = true; return { id: newId, pct: a.pct }; }
+        if (a.id === oldId){ changed = true; return { ...a, id: newId }; }
         return a;
       });
       if (changed) setAllocations(key, next);
@@ -310,7 +324,7 @@ export function initTicketApp() {
       }
       const total = allocationTotal(next);
       if (total > 0){
-        const scaled = next.map(a => ({ id: a.id, pct: (a.pct / total) * 100 }));
+        const scaled = next.map(a => ({ ...a, pct: (a.pct / total) * 100 }));
         setAllocations(key, scaled);
       } else {
         allocationMap.delete(key);
@@ -572,6 +586,11 @@ export function initTicketApp() {
   });
 
   document.addEventListener('click', (ev)=>{
+    const modeBtn = ev.target.closest('[data-split-mode]');
+    if (modeBtn){
+      setSplitInputMode(modeBtn.getAttribute('data-split-mode'));
+      return;
+    }
     const saveBtn = ev.target.closest('#splitSave');
     if (saveBtn){ saveSplitEditor(); return; }
     const clearBtn = ev.target.closest('#splitClear');
@@ -1006,16 +1025,22 @@ export function initTicketApp() {
 
   function renderAllocationsCell(allocs){
     if (!allocs || !allocs.length) return '—';
-    const byId = new Map(allocs.map(a => [a.id, a.pct]));
+    const byId = new Map(allocs.map(a => [a.id, a]));
     const parts = categories
       .filter(c => byId.has(c.id))
       .map(c => {
-        const pct = byId.get(c.id);
-        const showPct = allocs.length > 1 || Math.abs((pct || 0) - 100) > 0.2;
+        const allocation = byId.get(c.id);
+        const pct = allocation.pct;
+        const pointValue = Number(allocation.parts);
+        const hasPoints = isFinite(pointValue) && pointValue > 0;
+        const showShare = hasPoints || allocs.length > 1 || Math.abs((pct || 0) - 100) > 0.2;
+        const shareLabel = hasPoints
+          ? `${formatPercent(pointValue)} ${Math.abs(pointValue - 1) < 0.001 ? 'punto' : 'puntos'}`
+          : `${formatPercent(pct)}%`;
         return `<div class="cat-split-item">
           <span class="cat-dot" style="background:${c.color}"></span>
           <span class="cat-name">${escapeHtml(c.name)}</span>
-          ${showPct ? `<span class="cat-pct">${escapeHtml(formatPercent(pct))}%</span>` : ''}
+          ${showShare ? `<span class="cat-pct">${escapeHtml(shareLabel)}</span>` : ''}
         </div>`;
       });
     if (!parts.length) return '—';
@@ -1839,7 +1864,7 @@ export function initTicketApp() {
     });
   }
 
-  /* ------------ Reparto porcentual ------------ */
+  /* ------------ Reparto por porcentaje o puntos ------------ */
   function initSplitModal(){
     if (splitModal) return;
     const $modal = document.getElementById('splitModal');
@@ -1854,31 +1879,120 @@ export function initTicketApp() {
       }
     });
   }
-  function updateSplitTotal(){
+  function parsePointInput(val){
+    if (typeof val !== 'string') val = String(val ?? '');
+    const n = Number(val.trim().replace(/\s+/g, '').replace(',', '.'));
+    return isFinite(n) && n > 0 ? n : 0;
+  }
+  function captureSplitDraft(){
     const inputs = Array.from(document.querySelectorAll('#splitList .split-input'));
-    let total = 0;
+    const target = splitInputMode === 'points' ? splitDraftParts : splitDraftPercentages;
+    target.clear();
     for (const input of inputs){
-      total += parsePercentInput(input.value);
+      const id = input.getAttribute('data-cat-id');
+      const value = splitInputMode === 'points'
+        ? parsePointInput(input.value)
+        : parsePercentInput(input.value);
+      if (id && value > 0) target.set(id, value);
     }
+  }
+  function updateSplitTotal(){
+    captureSplitDraft();
+    const source = splitInputMode === 'points' ? splitDraftParts : splitDraftPercentages;
+    const total = Array.from(source.values()).reduce((sum, value) => sum + value, 0);
     const totalEl = document.getElementById('splitTotal');
-    if (totalEl) totalEl.textContent = `${formatPercent(total)}%`;
     const warn = document.getElementById('splitWarn');
-    const ok = Math.abs(total - 100) <= 0.2;
-    if (warn) warn.classList.toggle('d-none', ok || total === 0);
+    const isPoints = splitInputMode === 'points';
+    const ok = isPoints ? total > 0 : Math.abs(total - 100) <= 0.2;
+    if (totalEl) totalEl.textContent = isPoints
+      ? `${formatPercent(total)} ${Math.abs(total - 1) < 0.001 ? 'punto' : 'puntos'}`
+      : `${formatPercent(total)}%`;
+    if (warn) {
+      warn.textContent = isPoints ? 'Introduce al menos un punto.' : 'El total debe ser 100%.';
+      warn.classList.toggle('d-none', ok || total === 0);
+    }
     if (totalEl){
       totalEl.classList.toggle('text-success', ok);
       totalEl.classList.toggle('text-danger', !ok && total > 0);
     }
+    document.querySelectorAll('#splitList .split-calculated-pct').forEach((label) => {
+      const id = label.getAttribute('data-cat-id');
+      const value = source.get(id) || 0;
+      label.textContent = isPoints && total > 0 && value > 0
+        ? `${formatPercent((value / total) * 100)}%`
+        : '';
+    });
   }
   function readSplitAllocations(){
-    const inputs = Array.from(document.querySelectorAll('#splitList .split-input'));
+    captureSplitDraft();
     const list = [];
-    for (const input of inputs){
-      const id = input.getAttribute('data-cat-id');
-      const pct = parsePercentInput(input.value);
-      if (pct > 0) list.push({ id, pct });
+    if (splitInputMode === 'points') {
+      const total = Array.from(splitDraftParts.values()).reduce((sum, value) => sum + value, 0);
+      if (total <= 0) return list;
+      for (const [id, parts] of splitDraftParts.entries()) {
+        list.push({ id, parts, pct: (parts / total) * 100 });
+      }
+    } else {
+      for (const [id, pct] of splitDraftPercentages.entries()) {
+        list.push({ id, pct });
+      }
     }
     return list;
+  }
+  function renderSplitInputs(){
+    const list = document.getElementById('splitList');
+    if (!list) return;
+    const source = splitInputMode === 'points' ? splitDraftParts : splitDraftPercentages;
+    list.innerHTML = categories
+      .filter(c => !c.noSplit)
+      .map(c => {
+        const rawValue = source.get(c.id) || 0;
+        const value = rawValue > 0 ? formatPercent(rawValue) : '';
+        return `<div class="split-row">
+          <div class="split-label">
+            <span class="cat-dot" style="background:${c.color}"></span>
+            <span class="name">${escapeHtml(c.name)}</span>
+            <span class="split-calculated-pct" data-cat-id="${c.id}"></span>
+          </div>
+          <div class="input-group input-group-sm split-input-group">
+            <input type="text" class="form-control split-input" data-cat-id="${c.id}" inputmode="decimal" value="${value}" placeholder="0">
+            <span class="input-group-text">${splitInputMode === 'points' ? 'puntos' : '%'}</span>
+          </div>
+        </div>`;
+      }).join('');
+    list.querySelectorAll('.split-input').forEach((input) => {
+      input.addEventListener('input', updateSplitTotal);
+      input.addEventListener('blur', () => {
+        const n = splitInputMode === 'points'
+          ? parsePointInput(input.value)
+          : parsePercentInput(input.value);
+        input.value = n > 0 ? formatPercent(n) : '';
+        updateSplitTotal();
+      });
+    });
+    document.querySelectorAll('[data-split-mode]').forEach((button) => {
+      const isActive = button.getAttribute('data-split-mode') === splitInputMode;
+      button.classList.toggle('active', isActive);
+      button.setAttribute('aria-pressed', isActive ? 'true' : 'false');
+    });
+    updateSplitTotal();
+  }
+  function setSplitInputMode(mode){
+    if (mode !== 'percentage' && mode !== 'points') return;
+    captureSplitDraft();
+    if (mode === 'percentage' && splitInputMode === 'points') {
+      const total = Array.from(splitDraftParts.values()).reduce((sum, value) => sum + value, 0);
+      splitDraftPercentages = new Map();
+      if (total > 0) {
+        for (const [id, parts] of splitDraftParts.entries()) {
+          splitDraftPercentages.set(id, (parts / total) * 100);
+        }
+      }
+    } else if (mode === 'points' && splitDraftParts.size === 0) {
+      splitDraftParts = new Map(splitDraftPercentages);
+    }
+    splitInputMode = mode;
+    renderSplitInputs();
   }
   function openSplitEditor(key){
     const it = itemsByKey.get(key);
@@ -1893,39 +2007,16 @@ export function initTicketApp() {
         <div class="small text-muted">Importe: ${toEUR(it.amount)}</div>`;
     }
 
-    const list = document.getElementById('splitList');
     const allocs = getAllocations(key);
-    const byId = new Map(allocs.map(a => [a.id, a.pct]));
-    if (list){
-      list.innerHTML = categories
-        .filter(c => !c.noSplit)
-        .map(c => {
-        const pct = byId.get(c.id) || 0;
-        const value = pct > 0 ? formatPercent(pct) : '';
-        return `<div class="split-row">
-          <div class="split-label">
-            <span class="cat-dot" style="background:${c.color}"></span>
-            <span class="name">${escapeHtml(c.name)}</span>
-          </div>
-          <div class="input-group input-group-sm split-input-group">
-            <input type="text" class="form-control split-input" data-cat-id="${c.id}" inputmode="decimal" value="${value}" placeholder="0">
-            <span class="input-group-text">%</span>
-          </div>
-        </div>`;
-      }).join('');
-      list.querySelectorAll('.split-input').forEach((input) => {
-        input.addEventListener('input', updateSplitTotal);
-        input.addEventListener('blur', () => {
-          const n = parsePercentInput(input.value);
-          input.value = n > 0 ? formatPercent(n) : '';
-          updateSplitTotal();
-        });
-      });
-    }
+    splitDraftPercentages = new Map(allocs.map(a => [a.id, a.pct]));
+    splitDraftParts = new Map(allocs
+      .filter(a => isFinite(Number(a.parts)) && Number(a.parts) > 0)
+      .map(a => [a.id, Number(a.parts)]));
+    splitInputMode = splitDraftParts.size > 0 ? 'points' : 'percentage';
+    renderSplitInputs();
 
     const clearBtn = document.getElementById('splitClear');
     if (clearBtn) clearBtn.disabled = allocs.length === 0;
-    updateSplitTotal();
     splitModal.show();
   }
   function saveSplitEditor(){

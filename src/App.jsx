@@ -265,11 +265,19 @@ export default function App() {
         <div className="modal-dialog modal-dialog-scrollable">
           <div className="modal-content">
             <div className="modal-header">
-              <h5 className="modal-title" id="splitLabel">Repartir por porcentaje</h5>
+              <h5 className="modal-title" id="splitLabel">Repartir</h5>
               <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
             </div>
             <div className="modal-body">
               <div id="splitItemMeta" className="small text-muted"></div>
+              <div className="btn-group split-mode-toggle mt-3" role="group" aria-label="Modo de reparto">
+                <button type="button" className="btn btn-outline-secondary active" data-split-mode="percentage" aria-pressed="true">
+                  Porcentaje
+                </button>
+                <button type="button" className="btn btn-outline-secondary" data-split-mode="points" aria-pressed="false">
+                  Puntos
+                </button>
+              </div>
               <div id="splitList" className="split-list mt-2"></div>
               <div className="d-flex align-items-center justify-content-between mt-2">
                 <div className="small">Total: <strong id="splitTotal">0%</strong></div>
@@ -358,7 +366,7 @@ export default function App() {
                 </div>
                 <div className="col-6 d-flex align-items-end">
                   <button type="button" id="rowEditSplit" className="btn btn-outline-secondary w-100">
-                    Repartir %
+                    Repartir
                   </button>
                 </div>
                 <div className="col-12">
