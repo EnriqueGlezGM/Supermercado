@@ -182,11 +182,16 @@ export function parseProducts(lines, options = {}) {
   const store = String(options.store || '');
   const isNoise = (s) => /(\bIVA\b|BASE IMPONIBLE|CUOTA\b|TARJ|MASTERCARD|EFECTIVO|FACTURA|SE ADMITEN DEVOLUCIONES|CAMBIO|ENTREGA|RECIBO|AUTORIZ|IMP\.|DEVOLUCION|DEVOLUCIONES|HORARIO|ATENCION|GRACIAS)/i.test(s);
   const isLidlPlusPromoLine = (s) => /\bPROMO\s+LIDL\s+PLUS\b/i.test(s);
-  const isDiscountLine = (s) => /\b(?:DESC(?:UENTO)?\.?|PROMO\s+LIDL\s+PLUS)\b/i.test(s);
+  const isPromoLine = (s) => /\bPROMO\b/i.test(s);
+  const isDiscountLine = (s) => /\b(?:DESC(?:UENTO)?\.?|PROMO)\b/i.test(s);
   const isWeightLine = (s) => /\b(kg|g|l)\b.*?(?:x|×)\s*-?\d{1,3}(?:\.\d{3})*,\d{2}/i.test(s);
   const matchWeightLine = (s) => String(s || '').match(/^\s*([\d.,]+)\s*(kg|g|l)\b.*?(?:x|×)\s*(-?\d{1,3}(?:\.\d{3})*,\d{2})/i);
   const shouldAttachDiscount = () => store.toLowerCase() === 'lidl';
-  const getDiscountLineLabel = (row) => isLidlPlusPromoLine(row) ? 'Promo Lidl Plus' : 'Descuento';
+  const getDiscountLineLabel = (row) => {
+    if (isLidlPlusPromoLine(row)) return 'Promo Lidl Plus';
+    if (isPromoLine(row)) return 'Promo';
+    return 'Descuento';
+  };
   const parseDiscountPercent = (row) => {
     const m = String(row || '').match(/(\d{1,2}(?:[.,]\d+)?)\s*%/);
     if (!m) return NaN;
@@ -207,6 +212,12 @@ export function parseProducts(lines, options = {}) {
     let amountNum = toNumberEUR(p);
     if (amountNum > 0 && !/[-−–—]/.test(p)) amountNum = -amountNum;
     return amountNum;
+  };
+  const parseStandaloneNegativeAmount = (row) => {
+    const match = String(row || '').match(/^\s*(-\d{1,3}(?:\.\d{3})*,\d{1,2})\s*(?:€|EUR)?\s*$/i);
+    if (!match) return NaN;
+    const amount = toNumberEUR(match[1]);
+    return isFinite(amount) && amount < 0 ? amount : NaN;
   };
   const clean = (s) => String(s || '').replace(/\s{2,}/g, ' ').trim();
 
@@ -330,6 +341,14 @@ export function parseProducts(lines, options = {}) {
     if (isNoise(row) && !isDiscount) continue;
     if (parseUnitTimesQtyRow(row, i)) continue;
     if (isWeightLine(row)) continue;
+    const standaloneNegative = parseStandaloneNegativeAmount(row);
+    if (
+      shouldAttachDiscount()
+      && isFinite(standaloneNegative)
+      && i > 0
+      && isWeightLine(N[i - 1])
+      && attachDiscountToRecent(standaloneNegative, i, 'Descuento', { immediateOnly: true })
+    ) continue;
     if (shouldAttachDiscount() && parseCombinedDiscountRow(row, i)) continue;
     if (isDiscount && shouldAttachDiscount()) {
       const isLidlPlusPromo = isLidlPlusPromoLine(row);

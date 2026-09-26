@@ -22,6 +22,50 @@ test('parses Lidl unit-price times quantity rows when OCR also includes the fina
   assert.equal(items[0].amount, 5.98);
 });
 
+test('attaches a standalone negative amount after a Lidl weight line to that product', () => {
+  const items = parseProducts([
+    'QUESO VIEJO TOSTADO 19,41 A',
+    '1,494 kg x 12,99 EUR/kg',
+    '-2,99',
+    'DIGESTIVE 1,49 B',
+  ], { store: 'Lidl' });
+
+  assert.equal(items.length, 2);
+  assert.equal(items[0].description, 'QUESO VIEJO TOSTADO');
+  assert.equal(items[0].quantity, 1.494);
+  assert.equal(items[0].baseAmount, 19.41);
+  assert.equal(items[0].discountAmount, 2.99);
+  assert.deepEqual(items[0].discountLabels, ['Descuento']);
+  assert.equal(items[0].amount, 16.42);
+});
+
+test('attaches a plain PROMO line after a Lidl weight product', () => {
+  const items = parseProducts([
+    'QUESO VIEJO TOSTADO 19,41 A',
+    '1,494 kg x 12,99 EUR/kg',
+    'PROMO -2,99',
+    'DIGESTIVE 1,49 B',
+  ], { store: 'Lidl' });
+
+  assert.equal(items.length, 2);
+  assert.equal(items[0].description, 'QUESO VIEJO TOSTADO');
+  assert.equal(items[0].baseAmount, 19.41);
+  assert.equal(items[0].discountAmount, 2.99);
+  assert.deepEqual(items[0].discountLabels, ['Promo']);
+  assert.equal(items[0].amount, 16.42);
+});
+
+test('does not attach a standalone negative amount without a preceding weight line', () => {
+  const items = parseProducts([
+    'BEBIDA 1,25 A',
+    '-0,25',
+  ], { store: 'Lidl' });
+
+  assert.equal(items.length, 1);
+  assert.equal(items[0].amount, 1.25);
+  assert.equal(items[0].discountAmount, undefined);
+});
+
 test('keeps duplicate product rows as separate parser results', () => {
   const items = parseProducts([
     'BEBIDA 1,25 A',

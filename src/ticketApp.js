@@ -989,25 +989,10 @@ export function initTicketApp() {
     if (!labels.length) return 'Descuento';
     return labels.join(' + ');
   }
-  function getDiscountBadgeLabel(it){
-    const label = getDiscountSummaryLabel(it);
-    if (/lidl\s*plus/i.test(label)) return 'Lidl Plus';
-    if (/promo/i.test(label)) return 'Promo';
-    return 'Desc.';
-  }
-  function renderDiscountBadge(it){
-    if (!hasItemDiscount(it)) return '';
-    const title = `${getDiscountSummaryLabel(it)}: -${toEUR(getItemDiscountAmount(it))} €`;
-    return `<span class="discount-badge" title="${escapeHtml(title)}">${escapeHtml(getDiscountBadgeLabel(it))}</span>`;
-  }
   function renderDiscountMeta(it){
     if (!hasItemDiscount(it)) return '';
     const label = escapeHtml(getDiscountSummaryLabel(it));
-    const base = getItemBaseAmount(it);
-    const baseInfo = isFinite(base)
-      ? ` <span class="discount-base">antes ${toEUR(base)} €</span>`
-      : '';
-    return `<div class="discount-note">${label}: -${toEUR(getItemDiscountAmount(it))} €${baseInfo}</div>`;
+    return `<div class="discount-note">${label}: -${toEUR(getItemDiscountAmount(it))} €</div>`;
   }
   function renderAmountCell(it){
     const amount = Number(it && it.amount) || 0;
@@ -1149,7 +1134,6 @@ export function initTicketApp() {
       const rowClass = hidden ? `row-hidden${rowClassBase ? ' ' + rowClassBase : ''}` : rowClassBase;
       const role = (roleByKey.get(key) || '');
       const flag = priceFlagForRole(role);
-      const discountBadge = renderDiscountBadge(r);
       const discountMeta = renderDiscountMeta(r);
       const catCell = hidden ? '<span class="text-muted">Oculto</span>' : renderAllocationsCell(allocs);
 
@@ -1174,7 +1158,6 @@ export function initTicketApp() {
             <a class="desc-link" href="${buildSearchURL(r.description)}" target="_blank" rel="noopener">
               ${flag}<span class="desc-text">${escapeHtml(r.description)}</span>
             </a>
-            ${discountBadge}
           </div>
           ${discountMeta}
         </td>
