@@ -56,8 +56,16 @@ export function initTicketApp() {
   const $catsum = document.getElementById('catsum');
   const $btnExport = document.getElementById('btnExport');
   const $exportRoot = document.getElementById('export-root');
-  const $catAddBtn = document.getElementById('catAddBtn');
   const $btnToggleHidden = document.getElementById('btnToggleHidden');
+  const $categorySettingsBtn = document.getElementById('categorySettingsBtn');
+  const $categorySettingsModal = document.getElementById('categorySettingsModal');
+  const $categorySettingsList = document.getElementById('categorySettingsList');
+  const $categorySettingsAdd = document.getElementById('categorySettingsAdd');
+  const $ticketPreviewTrigger = document.getElementById('ticketPreviewTrigger');
+  const $btnTicketPreview = document.getElementById('btnTicketPreview');
+  const $ticketPreviewPanel = document.getElementById('ticketPreviewPanel');
+  const $ticketPreviewContent = document.getElementById('ticketPreviewContent');
+  const $btnCloseTicketPreview = document.getElementById('btnCloseTicketPreview');
 
   if (!$file || !$tblEl || !$progress || !$meta || !$check || !$catsum || !$btnExport || !$exportRoot) {
     return;
@@ -73,6 +81,35 @@ export function initTicketApp() {
   let manualExpectedTotal = NaN;
   let ticketExpectedTotal = NaN;
   let manualTotalSuggestions = [];
+  let ticketPreviewUrl = '';
+
+  function closeTicketPreview(){
+    document.body.classList.remove('ticket-preview-active');
+    if ($ticketPreviewPanel) $ticketPreviewPanel.classList.add('d-none');
+    if ($btnTicketPreview) $btnTicketPreview.textContent = 'Ver ticket';
+  }
+
+  function openTicketPreview(){
+    if (!ticketPreviewUrl || !$ticketPreviewPanel) return;
+    $ticketPreviewPanel.classList.remove('d-none');
+    document.body.classList.add('ticket-preview-active');
+    if ($btnTicketPreview) $btnTicketPreview.textContent = 'Ocultar ticket';
+  }
+
+  function setTicketPreview(file, isPdf){
+    if (!$ticketPreviewContent || !$ticketPreviewTrigger) return;
+    closeTicketPreview();
+    if (ticketPreviewUrl) URL.revokeObjectURL(ticketPreviewUrl);
+    ticketPreviewUrl = URL.createObjectURL(file);
+    $ticketPreviewContent.replaceChildren();
+    const preview = document.createElement(isPdf ? 'iframe' : 'img');
+    preview.src = ticketPreviewUrl;
+    preview.className = isPdf ? 'ticket-preview-pdf' : 'ticket-preview-image';
+    preview.setAttribute('title', 'Vista previa del ticket original');
+    if (!isPdf) preview.alt = 'Vista previa del ticket original';
+    $ticketPreviewContent.append(preview);
+    $ticketPreviewTrigger.classList.remove('d-none');
+  }
 
   /* Reparto por fila (item.id -> [{id,pct}]) */
   const allocationMap = new Map();
@@ -102,6 +139,7 @@ export function initTicketApp() {
   let catEditId = null;
   let catEditMode = 'edit';
   let catEditModal = null;
+  let categorySettingsModal = null;
   let splitEditKey = null;
   let splitModal = null;
   let exportMissingModal = null;
@@ -299,7 +337,7 @@ export function initTicketApp() {
     const bar = document.getElementById('catBar');
     if (!bar) return;
     if (!categories.length){
-      bar.innerHTML = `<span class="text-muted small">Añade categorías con el botón “+”.</span>`;
+      bar.innerHTML = `<span class="text-muted small">Añade categorías desde los ajustes.</span>`;
       updateNavSpacer();
       return;
     }
@@ -314,14 +352,43 @@ export function initTicketApp() {
       b.addEventListener('click', ()=>{
         const id = b.getAttribute('data-cat-id');
         if (!id) return;
-        if (id === activeCategoryId) {
-          openCategoryEditor(id, 'edit');
-        } else {
-          setActiveCategory(id);
-        }
+        setActiveCategory(id);
       });
     });
     updateNavSpacer();
+  }
+
+  function renderCategorySettings(){
+    if (!$categorySettingsList) return;
+    $categorySettingsList.innerHTML = categories.map((category) => `
+      <button type="button" class="category-settings-item" data-cat-id="${category.id}">
+        <span class="category-settings-name">
+          <span class="cat-swatch" style="background:${category.color}"></span>
+          <span>${escapeHtml(category.name)}</span>
+        </span>
+        <span class="category-settings-chevron" aria-hidden="true">›</span>
+      </button>
+    `).join('');
+  }
+
+  function openCategorySettings(){
+    if (!$categorySettingsModal) return;
+    renderCategorySettings();
+    if (!categorySettingsModal) {
+      categorySettingsModal = new Modal($categorySettingsModal, { backdrop: true, focus: true, keyboard: true });
+    }
+    categorySettingsModal.show();
+  }
+
+  function openCategoryEditorFromSettings(id, mode){
+    if (!categorySettingsModal || !$categorySettingsModal.classList.contains('show')) {
+      openCategoryEditor(id, mode);
+      return;
+    }
+    $categorySettingsModal.addEventListener('hidden.bs.modal', () => {
+      openCategoryEditor(id, mode);
+    }, { once: true });
+    categorySettingsModal.hide();
   }
 
   /* ---------- Editor categoría ---------- */
@@ -1697,6 +1764,7 @@ export function initTicketApp() {
       });
       const total = setTable(baseItems);
       setCheck(f.name, total);
+      setTicketPreview(f, isPdf);
       setProgress("");
     } catch (e){
       console.error(e);
@@ -2094,6 +2162,11 @@ export function initTicketApp() {
 
   /* ------------ EVENTOS ------------ */
   $file.addEventListener('change', processSelectedFile);
+  $btnTicketPreview?.addEventListener('click', () => {
+    if (document.body.classList.contains('ticket-preview-active')) closeTicketPreview();
+    else openTicketPreview();
+  });
+  $btnCloseTicketPreview?.addEventListener('click', closeTicketPreview);
   $check.addEventListener('submit', (ev) => {
     const form = ev.target.closest('#manualTotalForm');
     if (!form) return;
@@ -2237,7 +2310,14 @@ export function initTicketApp() {
     updateNavSpacer();
     window.addEventListener('resize', updateNavSpacer);
 
-    if ($catAddBtn) $catAddBtn.addEventListener('click', () => openCategoryEditor(null, 'create'));
+    $categorySettingsBtn?.addEventListener('click', openCategorySettings);
+    $categorySettingsAdd?.addEventListener('click', () => openCategoryEditorFromSettings(null, 'create'));
+    $categorySettingsList?.addEventListener('click', (ev) => {
+      const button = ev.target.closest('.category-settings-item');
+      if (!button) return;
+      const id = button.getAttribute('data-cat-id');
+      if (id) openCategoryEditorFromSettings(id, 'edit');
+    });
 
     // Botón de orden en cabecera
     const $btnSort = document.getElementById('btnSort');

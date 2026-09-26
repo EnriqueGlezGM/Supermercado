@@ -10,6 +10,20 @@ export default function App() {
   return (
     <>
       <div className="app-shell container py-4 pb-5">
+        <div className="app-topbar mb-3">
+          <span className="app-topbar-spacer" aria-hidden="true"></span>
+          <p className="glass-title mb-0">Lector de tickets</p>
+          <button
+            id="categorySettingsBtn"
+            className="category-settings-button"
+            type="button"
+            aria-label="Ajustes de categorías"
+            title="Ajustes de categorías"
+          >
+            <span aria-hidden="true">⚙</span>
+          </button>
+        </div>
+
         <header className="glass-header text-center mb-4">
           <div className="store-logos">
             <img
@@ -23,16 +37,23 @@ export default function App() {
               className="store-logo lidl-logo"
             />
           </div>
-          <p className="glass-title mb-0 mt-3">Lector de tickets</p>
           <small id="progress" className="text-muted d-block mt-2"></small>
         </header>
 
-        <input
-          id="file"
-          type="file"
-          accept="application/pdf,image/*"
-          className="form-control my-2"
-        />
+        <div className="ticket-upload-row my-2">
+          <input
+            id="file"
+            type="file"
+            accept="application/pdf,image/*"
+            className="form-control"
+          />
+
+          <div className="ticket-preview-trigger d-none" id="ticketPreviewTrigger">
+            <button id="btnTicketPreview" type="button" className="btn btn-outline-primary">
+              Ver ticket
+            </button>
+          </div>
+        </div>
 
         <div id="meta" className="small text-muted"></div>
         <div id="check" className="mb-2"></div>
@@ -128,18 +149,42 @@ export default function App() {
         <div id="nav-spacer" aria-hidden="true"></div>
       </div>
 
+      <section id="ticketPreviewPanel" className="ticket-preview-panel d-none" aria-label="Vista previa del ticket">
+        <div className="ticket-preview-toolbar">
+          <span className="ticket-preview-title">Ticket original</span>
+          <button id="btnCloseTicketPreview" type="button" className="btn-close" aria-label="Cerrar vista previa"></button>
+        </div>
+        <div id="ticketPreviewContent" className="ticket-preview-content"></div>
+      </section>
+
       <nav className="glass-nav fixed-bottom">
         <div className="container">
           <div className="glass-nav-dock">
             <div className="catbar-scroll">
               <div className="catbar" id="catBar"></div>
             </div>
-            <button id="catAddBtn" className="glass-fab" type="button" aria-label="Nueva categoría">
-              <span aria-hidden="true">+</span>
-            </button>
           </div>
         </div>
       </nav>
+
+      <div className="modal fade" id="categorySettingsModal" tabIndex={-1} aria-labelledby="categorySettingsLabel" aria-hidden="true">
+        <div className="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h5 className="modal-title" id="categorySettingsLabel">Ajustes de categorías</h5>
+              <button type="button" className="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+            </div>
+            <div className="modal-body">
+              <div id="categorySettingsList" className="category-settings-list"></div>
+            </div>
+            <div className="modal-footer">
+              <button type="button" id="categorySettingsAdd" className="btn btn-primary">
+                Nueva categoría
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
 
       <div className="modal fade" id="catEditModal" tabIndex={-1} aria-labelledby="catEditLabel" aria-hidden="true">
         <div className="modal-dialog">
